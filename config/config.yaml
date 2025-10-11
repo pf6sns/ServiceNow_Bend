@@ -10,10 +10,21 @@ incident_categories:
     subcategories:
       - "Software"
       - "Hardware" 
-      - "Network"
       - "Access Management"
       - "Database"
       - "System Performance"
+      - "Email Issues"
+      - "Application Errors"
+  
+  Security:
+    description: "IT Security and cybersecurity issues"
+    subcategories:
+      - "Malware"
+      - "Phishing"
+      - "Access Violations"
+      - "Data Breach"
+      - "Security Policy"
+      - "Security Tools"
   
   HR:
     description: "Human Resources matters"
@@ -24,6 +35,8 @@ incident_categories:
       - "Onboarding"
       - "Offboarding" 
       - "Training"
+      - "Employee Relations"
+      - "Leave Management"
   
   Finance:
     description: "Financial and accounting issues"
@@ -34,6 +47,8 @@ incident_categories:
       - "Payments"
       - "Purchase Orders"
       - "Reimbursements"
+      - "Accounting"
+      - "Financial Reports"
   
   Facilities:
     description: "Office and facilities management"
@@ -44,24 +59,55 @@ incident_categories:
       - "Space Management"
       - "Security"
       - "Utilities"
+      - "Cleaning"
+      - "Repairs"
+  
+  Network:
+    description: "Network infrastructure issues"
+    subcategories:
+      - "VPN"
+      - "Connectivity"
+      - "Firewall"
+      - "WiFi"
+      - "Network"
+      - "Network Performance"
+      - "DNS Issues"
+  
+  Infrastructure:
+    description: "Server and hardware infrastructure"
+    subcategories:
+      - "Server Downtime"
+      - "Storage"
+      - "Backup"
+      - "Virtualization"
+      - "Cloud Services"
+      - "Hardware Failure"
   
   General:
     description: "General support requests"
     subcategories:
       - "Information Request"
       - "Other"
+      - "General Inquiry"
 
 # Mapping of categories to ServiceNow assignment groups
 category_to_group:
-  IT: "Analytics Settings Managers"
-  General: "Analytics Settings Managers"
-  Support: "MIF Admins"
-  Hardware: "Analytics Settings Managers"
+  IT: "Applications Team"
+  Software: "Applications Team"
+  Applications: "Applications Team"
+  Security: "IT Securities"
+  Network: "Network Team"
+  Infrastructure: "Infrastructure Team"
+  Hardware: "Infrastructure Team"
+  HR: "HR Support"
+  Finance: "Finance Team"
+  Facilities: "Facilities Team"
+  General: "Applications Team"
 
 servicenow_fallbacks:
   default_assignment_group:
     sys_id: "019ad92ec7230010393d265c95c260dd"
-    name: "Analytics Settings Managers"
+    name: "Applications Team"
   default_caller:
     sys_id: ""
     name: "External User"
@@ -108,7 +154,6 @@ email_templates:
       {from_name}
 
       ---
-      This is an automated message. Please do not reply directly to this email.
       Ticket ID: {ticket_number}
       Created: {created_time}
 
@@ -135,7 +180,6 @@ email_templates:
       {from_name}
 
       ---
-      This is an automated message.
       Ticket ID: {ticket_number}
       Resolved: {closed_time}
 
@@ -160,9 +204,7 @@ email_templates:
         Thank you,
         {from_name}
 
-        ---
-        This is an automated message.
-        Ticket ID: {ticket_number}
+       
     
 
 # Application settings

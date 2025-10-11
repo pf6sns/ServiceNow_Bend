@@ -52,15 +52,21 @@ class ServiceNowAPI:
         """
         Internal helper for making REST API requests
         """
-        url = f"{self.api_base}/{endpoint}"
+        # Remove any leading slashes from endpoint to avoid double slashes
+        endpoint = endpoint.lstrip('/')
+        
+        # Ensure we don't have double slashes in the URL
+        url = f"{self.api_base}{endpoint}"
+        logger.debug(f"Making {method} request to: {url}")
+        
         try:
             response = requests.request(
                 method,
                 url,
                 auth=(self.username, self.password),
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
                 json=data,
-                params=params,   # ✅ allow query params here
+                params=params,
                 timeout=30
             )
             response.raise_for_status()

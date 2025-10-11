@@ -383,7 +383,10 @@ class EmailUtils:
         try:
             reply_to = message.get("Reply-To", "")
             if reply_to:
-                name, email_addr = EmailUtils.extract_email_from_header(reply_to)
+                name, email_addr = EmailUtils.extract_
+                
+                
+                email_from_header(reply_to)
                 return {"name": name, "email": email_addr}
             else:
                 # Fall back to From header

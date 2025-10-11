@@ -6,7 +6,7 @@ Main application entry point with background scheduler for agentic workflow
 import logging
 import asyncio
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException , Request
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
@@ -80,6 +80,128 @@ async def root():
         "scheduler_status": "running" if scheduler and scheduler.running else "stopped"
     }
 
+def extract_servicenow_ticket_id(jira_title: str) -> str:
+    """
+    Extract ServiceNow ticket ID from Jira issue title
+    Format expected: [INC0001234] Issue title
+    
+    Args:
+        jira_title: The title of the Jira issue
+        
+    Returns:
+        ServiceNow ticket ID or empty string if not found
+    """
+    import re
+    # Look for text in square brackets at the beginning of the title
+    match = re.match(r'^\[(.*?)\]', jira_title)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+@app.post("/rest/webhooks/webhook1")
+async def jira_webhook(request: Request):
+    """
+    Webhook handler for Jira status updates.
+    Syncs Jira issue status changes to ServiceNow incident states.
+    """
+    try:
+        # --- Parse webhook payload ---
+        data = await request.json()
+        issue_data = data.get("issue", {})
+        issue_fields = issue_data.get("fields", {})
+        issue_title = issue_fields.get("summary", "")
+        issue_status = issue_fields.get("status", {}).get("name", "")
+
+        if not issue_title or not issue_status:
+            logger.warning("Missing title or status in Jira webhook payload")
+            return {"message": "Webhook received but missing required data"}
+
+        # --- Extract ServiceNow ticket ID from Jira title ---
+        servicenow_ticket_id = extract_servicenow_ticket_id(issue_title)
+
+        if not servicenow_ticket_id:
+            logger.warning(f"Could not extract ServiceNow ticket ID from Jira title: {issue_title}")
+            return {"message": "Webhook received but no ServiceNow ticket ID found in title"}
+
+        # --- Map Jira statuses to ServiceNow states ---
+        status_mapping = {
+            "To Do": "1",        # New
+            "In Progress": "2",  # In Progress
+            "In Review": "2",    # In Progress
+            "On Hold": "3",      # On Hold
+            "Done": "6",         # Resolved
+            "Closed": "7"        # Closed
+        }
+
+        servicenow_state = status_mapping.get(issue_status)
+        if not servicenow_state:
+            logger.warning(f"No mapping found for Jira status: {issue_status}")
+            return {"message": f"Webhook received but no mapping for status: {issue_status}"}
+
+        # --- Initialize ServiceNow API ---
+        from tools.servicenow_api import ServiceNowAPI
+        from tools.config_loader import ConfigLoader
+
+        config = ConfigLoader()
+        servicenow_api = ServiceNowAPI(config)
+
+        # --- Lookup the incident in ServiceNow by ticket number ---
+        logger.info(f"Looking up ServiceNow incident with number: {servicenow_ticket_id}")
+        incidents = servicenow_api._make_request(
+            "GET",
+            "incident",
+            params={"sysparm_query": f"number={servicenow_ticket_id}", "sysparm_limit": 1}
+        )
+
+        result_list = incidents.get("data", {}).get("result", [])
+        if not incidents.get("success") or not result_list:
+            logger.error(f"Could not find ServiceNow incident with number: {servicenow_ticket_id}")
+            return {"message": f"Incident not found: {servicenow_ticket_id}"}
+
+        sys_id = result_list[0].get("sys_id")
+        logger.info(f"Found ServiceNow incident with sys_id: {sys_id}")
+
+        # --- Prepare update payload ---
+        update_data = {
+            "state": servicenow_state,
+            "incident_state": servicenow_state,  # Added to ensure both fields are updated
+            "work_notes": f"Status updated from Jira: {issue_status}"
+        }
+
+        # --- If Jira marks issue as Done or Closed, include close details ---
+        if servicenow_state in ["6", "7"]:
+            update_data.update({
+                "close_code": "Resolved by request",
+                "close_notes": "Automatically resolved via Jira webhook"
+            })
+
+        # --- Perform update using direct PATCH request ---
+        logger.info(f"Updating ServiceNow incident {servicenow_ticket_id} with sys_id {sys_id}")
+        result = servicenow_api._make_request(
+            "PATCH",
+            f"incident/{sys_id}",
+            data=update_data
+        )
+
+        if result.get("success"):
+            logger.info(
+                f"✅ Updated ServiceNow incident {servicenow_ticket_id} "
+                f"to state {servicenow_state} ({issue_status})"
+            )
+            return {
+                "message": "ServiceNow ticket updated successfully",
+                "ticket_id": servicenow_ticket_id,
+                "new_state": servicenow_state
+            }
+        else:
+            error_detail = result.get("error") or result
+            logger.error(f"❌ Failed to update ServiceNow incident: {error_detail}")
+            return {"message": f"Error updating ServiceNow ticket: {error_detail}"}
+
+    except Exception as e:
+        logger.exception(f"Unhandled exception in Jira webhook: {str(e)}")
+        return {"message": f"Error processing webhook: {str(e)}"}
+
 @app.get("/health")
 async def health_check():
     """Detailed health check endpoint"""
@@ -107,6 +229,8 @@ async def trigger_manual():
     except Exception as e:
         logger.error(f"Manual trigger failed: {e}")
         raise HTTPException(status_code=500, detail=f"Manual trigger failed: {str(e)}")
+
+
 
 if __name__ == "__main__":
     import uvicorn

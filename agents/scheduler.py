@@ -16,6 +16,7 @@ from agents.category_extractor import CategoryExtractorAgent
 from agents.servicenow import ServiceNowAgent
 from agents.notification import NotificationAgent
 from agents.tracker import TrackerAgent
+from agents.jira_agent import JiraAgent
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -48,6 +49,7 @@ class SchedulerAgent:
         self.servicenow = ServiceNowAgent(config)
         self.notification = NotificationAgent(config)
         self.tracker = TrackerAgent(config)
+        self.jira_agent = JiraAgent(config)
         
         # Build the workflow graph
         self.workflow = self._build_workflow_graph()
@@ -142,6 +144,14 @@ class SchedulerAgent:
                         )
                         
                         logger.info(f"Created ticket {ticket_result.get('ticket_number')} for email from {email.get('from', '')}")
+                        
+                        # Check if technical ticket and create Jira ticket if needed
+                        jira_result = asyncio.run(self.jira_agent.create_jira_ticket(ticket_data))
+                        if jira_result.get("success"):
+                            logger.info(f"Created Jira ticket for technical issue: {ticket_result.get('ticket_number')}")
+                            ticket_data["jira_ticket"] = jira_result.get("jira_ticket")
+                        else:
+                            logger.info(f"Ticket {ticket_result.get('ticket_number')} not technical or Jira creation failed: {jira_result.get('message')}")
                     
                 except Exception as e:
                     logger.error(f"Error processing email: {e}")

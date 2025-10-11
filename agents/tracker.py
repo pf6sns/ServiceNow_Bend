@@ -121,15 +121,17 @@ class TrackerAgent:
             if current_status != previous_status:
                 logger.info(f"Status change for {ticket_number}: {previous_status} -> {current_status}")
                 
-                # Add to status history
+                # Store the actual previous status for notifications BEFORE updating
+                actual_previous_status = previous_status
+                actual_previous_status_name = self.status_mappings.get(actual_previous_status, "Unknown") if actual_previous_status else "Unknown"
+                
+                # Add to status history (with correct previous status)
                 ticket_data["status_history"].append({
                     "status": current_status,
                     "status_name": current_status_name,
                     "timestamp": datetime.now(),
-                    "previous_status": previous_status
+                    "previous_status": actual_previous_status
                 })
-                
-                ticket_data["last_status"] = current_status
                 
                 # Send notification if ticket is closed
                 if current_status in self.closed_states and not ticket_data.get("notification_sent"):
@@ -138,8 +140,14 @@ class TrackerAgent:
                 
                 # Send update notification for ANY status change if configured
                 elif self.config.get_setting("send_status_updates", False):
-                    await self._send_status_update_notification(sys_id, ticket_data, status_result)
-            
+                    await self._send_status_update_notification(
+                        sys_id, ticket_data, status_result, 
+                        actual_previous_status, actual_previous_status_name
+                    )
+                
+                # FINALLY update the stored status AFTER all notifications are sent
+                ticket_data["last_status"] = current_status
+                
         except Exception as e:
             logger.error(f"Error checking single ticket {sys_id}: {e}")
 
@@ -177,7 +185,9 @@ class TrackerAgent:
         except Exception as e:
             logger.error(f"Error sending closure notification for {sys_id}: {e}")
     
-    async def _send_status_update_notification(self, sys_id: str, ticket_data: Dict[str, Any], status_result: Dict[str, Any]):
+    async def _send_status_update_notification(self, sys_id: str, ticket_data: Dict[str, Any], 
+                                         status_result: Dict[str, Any], 
+                                         previous_status: str, previous_status_name: str):
         """Send status update notification email"""
         try:
             ticket_number = ticket_data.get("ticket_number", "")
@@ -188,15 +198,13 @@ class TrackerAgent:
                 logger.warning(f"No caller email for ticket {ticket_number}, skipping update notification")
                 return
             
-            # Prepare notification data
+            # Prepare notification data - now using the passed previous status values
             short_description = additional_data.get("short_description", "Support Request")
             current_status = status_result.get("state", "")
             status_name = self.status_mappings.get(current_status, "Unknown")
-            previous_status = ticket_data.get("last_status")
-            previous_status_name = self.status_mappings.get(previous_status, "Unknown") if previous_status else "Unknown"
             
-            # Create update notes
-            update_notes = f"Ticket status changed from {previous_status_name} to {status_name}"
+            # Create update notes using the correct previous status
+            update_notes = f"Ticket status changed to {status_name}"
             
             # Add resolution notes if available (for resolved/closed states)
             if current_status in ["6", "7"] and status_result.get("resolution_notes"):
@@ -224,6 +232,7 @@ class TrackerAgent:
                 
         except Exception as e:
             logger.error(f"Error sending status update notification for {sys_id}: {e}")
+  
     def get_tracked_tickets_summary(self) -> Dict[str, Any]:
         """Get summary of currently tracked tickets"""
         try:
