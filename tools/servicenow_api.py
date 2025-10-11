@@ -307,6 +307,39 @@ class ServiceNowAPI:
             logger.error(f"Error looking up user by username {username}: {e}")
             return {"found": False, "error": str(e)}
     
+    def lookup_user_by_sys_id(self, sys_id: str) -> Dict[str, Any]:
+        """
+        Lookup user by sys_id
+        
+        Args:
+            sys_id: ServiceNow sys_id of the user
+            
+        Returns:
+            Dict containing user information
+        """
+        try:
+            result = self._make_request("GET", f"sys_user/{sys_id}")
+            
+            if result.get("success"):
+                user = result.get("data", {}).get("result", {})
+                if user:
+                    return {
+                        "found": True,
+                        "sys_id": user.get("sys_id"),
+                        "name": user.get("name"),
+                        "email": user.get("email"),
+                        "user_name": user.get("user_name"),
+                        "active": user.get("active") == "true"
+                    }
+                else:
+                    return {"found": False}
+            else:
+                return {"found": False, "error": result.get("error")}
+                
+        except Exception as e:
+            logger.error(f"Error looking up user by sys_id {sys_id}: {e}")
+            return {"found": False, "error": str(e)}
+    
     def create_user(self, user_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Create new user in ServiceNow

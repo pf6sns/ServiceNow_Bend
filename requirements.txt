@@ -82,3 +82,5 @@ gunicorn
 
 #UI
 streamlit
+
+aiohttp

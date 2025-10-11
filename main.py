@@ -150,7 +150,11 @@ async def jira_webhook(request: Request):
         incidents = servicenow_api._make_request(
             "GET",
             "incident",
-            params={"sysparm_query": f"number={servicenow_ticket_id}", "sysparm_limit": 1}
+            params={
+                "sysparm_query": f"number={servicenow_ticket_id}", 
+                "sysparm_limit": 1,
+                "sysparm_fields": "sys_id,number,short_description,state,incident_state,caller_id,work_notes,resolution_notes"
+            }
         )
 
         result_list = incidents.get("data", {}).get("result", [])
@@ -188,6 +192,68 @@ async def jira_webhook(request: Request):
                 f"✅ Updated ServiceNow incident {servicenow_ticket_id} "
                 f"to state {servicenow_state} ({issue_status})"
             )
+            
+            # --- Send email notification to ticket recipients ---
+            try:
+                # Get ticket details for email notification
+                ticket_details = result_list[0]
+                logger.info(f"ServiceNow ticket details: {ticket_details}")
+                caller_sys_id = ticket_details.get("caller_id", "")
+                short_description = ticket_details.get("short_description", "Support Request")
+                
+                # Lookup caller email using caller sys_id
+                caller_email = ""
+                if caller_sys_id:
+                    logger.info(f"Looking up caller email for sys_id: {caller_sys_id}")
+                    caller_lookup = servicenow_api.lookup_user_by_sys_id(caller_sys_id)
+                    if caller_lookup.get("found"):
+                        caller_email = caller_lookup.get("email", "")
+                        logger.info(f"Found caller email: {caller_email}")
+                    else:
+                        logger.warning(f"Caller lookup failed: {caller_lookup.get('error', 'Unknown error')}")
+                else:
+                    logger.warning(f"No caller sys_id found for ticket {servicenow_ticket_id}")
+                
+                if caller_email:
+                    # Initialize notification agent
+                    from agents.notification import NotificationAgent
+                    notification_agent = NotificationAgent(config)
+                    
+                    # Map ServiceNow state to status name for email
+                    status_names = {
+                        "1": "New",
+                        "2": "In Progress", 
+                        "3": "On Hold",
+                        "6": "Resolved",
+                        "7": "Closed"
+                    }
+                    status_name = status_names.get(servicenow_state, "Updated")
+                    
+                    # Prepare update notes
+                    update_notes = f"Ticket status changed to {status_name} via Jira update"
+                    if servicenow_state in ["6", "7"]:
+                        update_notes += "\n\nResolution: Automatically resolved via Jira webhook"
+                    
+                    # Send update email
+                    email_result = notification_agent.send_update_email(
+                        recipient_email=caller_email,
+                        ticket_number=servicenow_ticket_id,
+                        short_description=short_description,
+                        update_notes=update_notes,
+                        status=status_name
+                    )
+                    
+                    if email_result.get("success"):
+                        logger.info(f"✅ Email notification sent to {caller_email} for ticket {servicenow_ticket_id}")
+                    else:
+                        logger.warning(f"⚠️ Failed to send email notification: {email_result.get('error')}")
+                else:
+                    logger.warning(f"No caller email found for ticket {servicenow_ticket_id}, skipping email notification")
+                    
+            except Exception as email_error:
+                logger.error(f"Error sending email notification: {email_error}")
+                # Don't fail the webhook if email fails
+            
             return {
                 "message": "ServiceNow ticket updated successfully",
                 "ticket_id": servicenow_ticket_id,
