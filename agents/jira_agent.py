@@ -32,6 +32,7 @@ class JiraAgent:
         """
         try:
             # Check if the ticket is technical using the dedicated detector
+            print("Checking if technical ticket")
             technical_result = await self.technical_detector.is_technical_ticket(ticket_data)
             
             if not technical_result.get("is_technical", False):

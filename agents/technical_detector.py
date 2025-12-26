@@ -25,7 +25,7 @@ class TechnicalDetectorAgent:
         
         # Initialize Gemini model
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-exp",  # Using Gemini 2.5 Flash equivalent
+            model="gemini-2.5-flash",  # Using Gemini 2.5 Flash equivalent
             google_api_key=api_key,
             temperature=0.1,  # Low temperature for consistent classification
             max_tokens=100
@@ -93,7 +93,8 @@ Classification:"""
             subcategory = category_data.get("subcategory", "")
             
             # Log classification attempt
-            logger.debug(f"Determining if ticket is technical: '{subject[:50]}...'")
+            logger.info(f"🔍 Technical Detection - Analyzing ticket: '{subject[:50]}...'")
+            logger.debug(f"Category: {category}, Body preview: {body[:100]}...")
             
             # Prepare prompt
             prompt_text = self.technical_prompt.format(
@@ -111,9 +112,10 @@ Classification:"""
             is_technical = classification == "TECHNICAL"
             
             # Log result
-            result_text = "technical" if is_technical else "non-technical"
-            logger.info(f"Ticket '{subject[:30]}...' classified as: {result_text}")
-            logger.debug(f"Technical classification response: {classification}")
+            result_text = "✅ TECHNICAL" if is_technical else "❌ NON-TECHNICAL"
+            logger.info(f"Technical Detection Result: {result_text}")
+            logger.info(f"Ticket: '{subject[:50]}...'")
+            logger.debug(f"Full classification response: {classification}")
             
             return {
                 "is_technical": is_technical,

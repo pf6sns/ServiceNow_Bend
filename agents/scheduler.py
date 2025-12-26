@@ -130,6 +130,7 @@ class SchedulerAgent:
                     
                     # Create ticket in ServiceNow
                     ticket_result = self.servicenow.create_incident(ticket_data)
+                    print("Ticket Result:",ticket_result.get("success"))
                     
                     if ticket_result.get("success"):
                         ticket_data["ticket_number"] = ticket_result.get("ticket_number")
@@ -144,7 +145,7 @@ class SchedulerAgent:
                         )
                         
                         logger.info(f"Created ticket {ticket_result.get('ticket_number')} for email from {email.get('from', '')}")
-                        
+                        logger.info("Sending jira")
                         # Check if technical ticket and create Jira ticket if needed
                         jira_result = asyncio.run(self.jira_agent.create_jira_ticket(ticket_data))
                         if jira_result.get("success"):

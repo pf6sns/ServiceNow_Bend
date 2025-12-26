@@ -27,7 +27,7 @@ class SummaryAgent:
         
         # Initialize Gemini model
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-exp",  # Using Gemini 2.5 Flash equivalent
+            model="gemini-2.5-flash",  # Using Gemini 2.5 Flash equivalent
             google_api_key=api_key,
             temperature=0.3,  # Slightly higher for creative summaries
             max_tokens=300
@@ -97,11 +97,19 @@ Response:"""
                 result_text = response.content.strip()
                 # Remove Markdown-style code fences if present
                 cleaned_text = re.sub(r"^```(?:json)?\s*|\s*```$", "", result_text, flags=re.DOTALL).strip()
-                print("data",cleaned_text)
+                
+                # Try to extract JSON if embedded in other text
+                json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned_text, re.DOTALL)
+                if json_match:
+                    cleaned_text = json_match.group(0)
+                
+                logger.debug(f"Parsing JSON response: {cleaned_text[:200]}...")
                 summary_data = json.loads(cleaned_text)
-            except json.JSONDecodeError:
+                
+            except (json.JSONDecodeError, AttributeError) as e:
                 # Fallback if JSON parsing fails
-                logger.warning("Failed to parse JSON response, using fallback")
+                logger.warning(f"Failed to parse JSON response: {e}. Using fallback")
+                logger.debug(f"Raw response was: {result_text[:500]}")
                 summary_data = self._create_fallback_summary(email_data)
             
             # Validate and clean data

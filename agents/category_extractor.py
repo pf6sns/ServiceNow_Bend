@@ -26,7 +26,7 @@ class CategoryExtractorAgent:
         
         # Initialize Gemini model
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-exp",  # Using Gemini 2.5 Flash equivalent
+            model="gemini-2.5-flash",  # Using Gemini 2.5 Flash equivalent
             google_api_key=api_key,
             temperature=0.1,  # Low temperature for consistent categorization
             max_tokens=200

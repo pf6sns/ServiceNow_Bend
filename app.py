@@ -22,7 +22,9 @@ try:
     from agents.classifier import ClassifierAgent
     from agents.summary import SummaryAgent
     from agents.category_extractor import CategoryExtractorAgent
+    from agents.technical_detector import TechnicalDetectorAgent
     from agents.servicenow import ServiceNowAgent
+    from agents.jira_agent import JiraAgent
     from agents.notification import NotificationAgent
     from agents.tracker import TrackerAgent
     from tools.config_loader import ConfigLoader
@@ -54,7 +56,9 @@ class WorkflowManager:
                 ('classifier', ClassifierAgent, 'Classifier'),
                 ('summary', SummaryAgent, 'Summary Agent'),
                 ('category_extractor', CategoryExtractorAgent, 'Category Extractor'),
+                ('technical_detector', TechnicalDetectorAgent, 'Technical Detector'),
                 ('servicenow', ServiceNowAgent, 'ServiceNow Agent'),
+                ('jira', JiraAgent, 'Jira Agent'),
                 ('notification', NotificationAgent, 'Notification Agent'),
                 ('tracker', TrackerAgent, 'Tracker Agent')
             ]
@@ -87,7 +91,9 @@ class WorkflowManager:
             self.scheduler.classifier = self.agents['classifier']
             self.scheduler.summary = self.agents['summary']
             self.scheduler.category_extractor = self.agents['category_extractor']
+            self.scheduler.technical_detector = self.agents['technical_detector']
             self.scheduler.servicenow = self.agents['servicenow']
+            self.scheduler.jira = self.agents['jira']
             self.scheduler.notification = self.agents['notification']
             self.scheduler.tracker = self.agents['tracker']
             
@@ -183,9 +189,42 @@ class WorkflowManager:
                 log_callback("info", f"🏷️ Extracted {len(categories)} categories")
             
             if progress_callback:
+                progress_callback(50)
+            
+            # Step 5: Detect Technical Tickets
+            if log_callback:
+                log_callback("step_start", "detect_technical", "Detect Technical Tickets")
+                log_callback("agent_update", "Technical Detector", "🟡 Working")
+            
+            import asyncio
+            technical_results = []
+            for i, email in enumerate(support_emails):
+                if i < len(summaries) and i < len(categories):
+                    ticket_data = {
+                        "email": email,
+                        "summary": summaries[i],
+                        "category": categories[i]
+                    }
+                    # Run async detection
+                    technical_result = asyncio.run(
+                        self.scheduler.technical_detector.is_technical_ticket(ticket_data)
+                    )
+                    technical_results.append(technical_result)
+                else:
+                    technical_results.append({"is_technical": False, "confidence": "low"})
+            
+            results['technical_results'] = technical_results
+            technical_count = sum(1 for r in technical_results if r.get('is_technical', False))
+            
+            if log_callback:
+                log_callback("step_complete", "detect_technical", "Detect Technical Tickets")
+                log_callback("agent_update", "Technical Detector", "✅ Ready")
+                log_callback("info", f"🔍 Found {technical_count} technical tickets out of {len(support_emails)}")
+            
+            if progress_callback:
                 progress_callback(60)
             
-            # Step 5: Create ServiceNow Tickets
+            # Step 6: Create ServiceNow Tickets
             if log_callback:
                 log_callback("step_start", "create_tickets", "Create ServiceNow Tickets")
                 log_callback("agent_update", "ServiceNow Agent", "🟡 Working")
@@ -195,16 +234,19 @@ class WorkflowManager:
             
             for i, email in enumerate(support_emails):
                 if i < len(summaries) and i < len(categories):
+                    is_technical = technical_results[i].get('is_technical', False) if i < len(technical_results) else False
                     ticket_data = {
                         "email": email,
                         "summary": summaries[i],
                         "category": categories[i],
+                        "technical_result": technical_results[i] if i < len(technical_results) else {},
                         "short_description": summaries[i].get("short_description", "Support Request"),
                         "description": summaries[i].get("description", email.get("subject", "")),
                         "caller_email": email.get("from", ""),
                         "category_name": categories[i].get("category", "General"),
                         "priority": categories[i].get("priority", "3"),
-                        "urgency": categories[i].get("urgency", "3")
+                        "urgency": categories[i].get("urgency", "3"),
+                        "is_technical": is_technical
                     }
                     
                     result = self.scheduler.servicenow.create_incident(ticket_data)
@@ -226,9 +268,61 @@ class WorkflowManager:
                 log_callback("info", f"🎫 Created {tickets_created} tickets")
             
             if progress_callback:
+                progress_callback(70)
+            
+            # Step 6.5: Create Jira Tickets for Technical Issues
+            if log_callback:
+                log_callback("step_start", "create_jira_tickets", "Create Jira Tickets")
+                log_callback("agent_update", "Jira Agent", "🟡 Working")
+            
+            jira_tickets_created = 0
+            jira_ticket_details = []
+            
+            for i, email in enumerate(support_emails):
+                if i < len(technical_results) and technical_results[i].get('is_technical', False):
+                    # This is a technical ticket, create Jira ticket
+                    jira_ticket_data = {
+                        "email": email,
+                        "summary": summaries[i] if i < len(summaries) else {},
+                        "category": categories[i] if i < len(categories) else {},
+                        "technical_result": technical_results[i],
+                        "ticket_number": ticket_details[i].get('ticket_number', '') if i < len(ticket_details) else ''
+                    }
+                    
+                    # Create Jira ticket (async)
+                    jira_result = asyncio.run(
+                        self.scheduler.jira.create_jira_ticket(jira_ticket_data)
+                    )
+                    
+                    if jira_result.get('success'):
+                        jira_tickets_created += 1
+                        jira_ticket_info = jira_result.get('jira_ticket', {})
+                        jira_ticket_details.append({
+                            "jira_key": jira_ticket_info.get('key', 'N/A'),
+                            "jira_id": jira_ticket_info.get('id', 'N/A'),
+                            "servicenow_ticket": ticket_details[i].get('ticket_number', '') if i < len(ticket_details) else '',
+                            "subject": email.get('subject', 'No Subject'),
+                            "assignee": jira_ticket_info.get('assignee', {}).get('displayName', 'Unassigned')
+                        })
+                        
+                        if log_callback:
+                            log_callback("info", f"🔧 Created Jira ticket {jira_ticket_info.get('key', 'N/A')} for technical issue")
+                    else:
+                        if log_callback:
+                            log_callback("info", f"⚠️ Failed to create Jira ticket: {jira_result.get('message', 'Unknown error')}")
+            
+            results['jira_tickets_created'] = jira_tickets_created
+            results['jira_ticket_details'] = jira_ticket_details
+            
+            if log_callback:
+                log_callback("step_complete", "create_jira_tickets", "Create Jira Tickets")
+                log_callback("agent_update", "Jira Agent", "✅ Ready")
+                log_callback("info", f"🔧 Created {jira_tickets_created} Jira tickets for technical issues")
+            
+            if progress_callback:
                 progress_callback(75)
             
-            # Step 6: Send Notifications
+            # Step 7: Send Notifications
             if log_callback:
                 log_callback("step_start", "send_notifications", "Send Notifications")
                 log_callback("agent_update", "Notification Agent", "🟡 Working")
@@ -254,7 +348,7 @@ class WorkflowManager:
             if progress_callback:
                 progress_callback(90)
             
-            # Step 7: Start Tracking
+            # Step 8: Start Tracking
             if log_callback:
                 log_callback("step_start", "start_tracking", "Start Tracking")
                 log_callback("agent_update", "Tracker Agent", "🟡 Working")
@@ -284,10 +378,14 @@ class WorkflowManager:
             final_results = {
                 'total_emails': len(emails),
                 'support_emails': len(support_emails),
+                'technical_tickets': technical_count,
+                'non_technical_tickets': len(support_emails) - technical_count,
                 'tickets_created': tickets_created,
+                'jira_tickets_created': jira_tickets_created,
                 'notifications_sent': notifications_sent,
                 'tracking_started': tracking_started,
                 'ticket_details': ticket_details,
+                'jira_ticket_details': jira_ticket_details,
                 'details': results
             }
             
@@ -314,7 +412,9 @@ class StreamlitUI:
             {"id": "classify_emails", "name": "Classify Emails", "agent": "Classifier", "icon": "🔍"},
             {"id": "generate_summaries", "name": "Generate Summaries", "agent": "Summary Agent", "icon": "📝"},
             {"id": "extract_categories", "name": "Extract Categories", "agent": "Category Extractor", "icon": "🏷️"},
+            {"id": "detect_technical", "name": "Detect Technical Tickets", "agent": "Technical Detector", "icon": "🔍"},
             {"id": "create_tickets", "name": "Create ServiceNow Tickets", "agent": "ServiceNow Agent", "icon": "🎫"},
+            {"id": "create_jira_tickets", "name": "Create Jira Tickets (Technical)", "agent": "Jira Agent", "icon": "🔧"},
             {"id": "send_notifications", "name": "Send Notifications", "agent": "Notification Agent", "icon": "📨"},
             {"id": "start_tracking", "name": "Start Tracking", "agent": "Tracker Agent", "icon": "📊"}
         ]
@@ -620,7 +720,9 @@ class StreamlitUI:
                 'Classifier': {'status': '❓ Not Initialized', 'health': 'unknown', 'last_update': None},
                 'Summary Agent': {'status': '❓ Not Initialized', 'health': 'unknown', 'last_update': None},
                 'Category Extractor': {'status': '❓ Not Initialized', 'health': 'unknown', 'last_update': None},
+                'Technical Detector': {'status': '❓ Not Initialized', 'health': 'unknown', 'last_update': None},
                 'ServiceNow Agent': {'status': '❓ Not Initialized', 'health': 'unknown', 'last_update': None},
+                'Jira Agent': {'status': '❓ Not Initialized', 'health': 'unknown', 'last_update': None},
                 'Notification Agent': {'status': '❓ Not Initialized', 'health': 'unknown', 'last_update': None},
                 'Tracker Agent': {'status': '❓ Not Initialized', 'health': 'unknown', 'last_update': None}
             }
@@ -1003,16 +1105,18 @@ class StreamlitUI:
             results = st.session_state.workflow_status['results']
             
             # Main metrics
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3, col4, col5, col6 = st.columns(6)
             
             metrics = [
                 ("📧", "Total Emails", results.get('total_emails', 0)),
                 ("🎯", "Support Emails", results.get('support_emails', 0)),
-                ("🎫", "Tickets Created", results.get('tickets_created', 0)),
+                ("🔍", "Technical", results.get('technical_tickets', 0)),
+                ("🎫", "ServiceNow", results.get('tickets_created', 0)),
+                ("🔧", "Jira", results.get('jira_tickets_created', 0)),
                 ("📨", "Notifications", results.get('notifications_sent', 0))
             ]
             
-            for col, (icon, label, value) in zip([col1, col2, col3, col4], metrics):
+            for col, (icon, label, value) in zip([col1, col2, col3, col4, col5, col6], metrics):
                 with col:
                     st.markdown(f"""
                     <div class="metrics-card">
@@ -1023,7 +1127,7 @@ class StreamlitUI:
                     """, unsafe_allow_html=True)
             
             # Detailed results
-            st.markdown("### 📋 Ticket Details")
+            st.markdown("### 📋 ServiceNow Ticket Details")
             
             if 'ticket_details' in results and results['ticket_details']:
                 for i, ticket in enumerate(results['ticket_details']):
@@ -1044,7 +1148,30 @@ class StreamlitUI:
                         
                         st.divider()
             else:
-                st.info("📄 No ticket details available")
+                st.info("📄 No ServiceNow ticket details available")
+            
+            # Jira ticket details
+            if 'jira_ticket_details' in results and results['jira_ticket_details']:
+                st.markdown("### 🔧 Jira Ticket Details (Technical Issues)")
+                for i, jira_ticket in enumerate(results['jira_ticket_details']):
+                    with st.container():
+                        col1, col2, col3 = st.columns([2, 3, 2])
+                        
+                        with col1:
+                            st.markdown(f"**🔧 Jira #{i+1}**")
+                            st.code(jira_ticket.get('jira_key', 'N/A'))
+                        
+                        with col2:
+                            st.markdown("**📧 Subject**")
+                            st.write(jira_ticket.get('subject', 'No Subject'))
+                            st.markdown("**🎫 ServiceNow Ticket**")
+                            st.write(jira_ticket.get('servicenow_ticket', 'N/A'))
+                        
+                        with col3:
+                            st.markdown("**👤 Assigned To**")
+                            st.write(jira_ticket.get('assignee', 'Unassigned'))
+                        
+                        st.divider()
                 
         else:
             st.info("📊 No metrics available. Run the workflow to see results.")
@@ -1313,9 +1440,11 @@ class StreamlitUI:
                         agent_configs = {
                             'Mail Fetcher': {'type': 'Gmail IMAP', 'protocol': 'IMAP over SSL'},
                             'Classifier': {'type': 'AI Classification', 'model': 'OpenAI GPT-4'},
-                            'Summary Agent': {'type': 'AI Summarization', 'model': 'OpenAI GPT-4'},
+                            'Summary Agent': {'type': 'AI Summarization', 'model': 'Gemini 2.5 Flash'},
                             'Category Extractor': {'type': 'AI Categorization', 'model': 'OpenAI GPT-4'},
+                            'Technical Detector': {'type': 'AI Classification', 'model': 'Gemini 2.5 Flash'},
                             'ServiceNow Agent': {'type': 'REST API Client', 'endpoint': 'ServiceNow'},
+                            'Jira Agent': {'type': 'REST API Client', 'endpoint': 'Jira Auto-Assign'},
                             'Notification Agent': {'type': 'SMTP Client', 'protocol': 'Email'},
                             'Tracker Agent': {'type': 'Background Monitor', 'method': 'Polling'}
                         }

@@ -25,7 +25,7 @@ class ClassifierAgent:
         
         # Initialize Gemini model
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-exp",  # Using Gemini 2.5 Flash equivalent
+            model="gemini-2.5-flash",  # Using Gemini 2.5 Flash equivalent
             google_api_key=api_key,
             temperature=0.1,  # Low temperature for consistent classification
             max_tokens=100
@@ -97,6 +97,7 @@ Classification:"""
             # Get classification from Gemini
             response = self.llm.invoke([HumanMessage(content=prompt_text)])
             classification = response.content.strip().upper()
+            print("Classification",classification)
             
             # Parse result
             is_support = classification == "SUPPORT"
