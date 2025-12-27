@@ -232,8 +232,14 @@ flowchart TD
 
 6. **Run the application**
    ```bash
-   python -m app.main
+   python3 ./main.py
    ```
+
+### Jira Integration & Port Forwarding
+To enable Jira webhooks to communicate with the local agent, port forwarding is required.
+**Current DevTunnel URL:** `https://xj6mg14p-8000.inc1.devtunnels.ms/`
+
+Ensure this URL is configured in your Jira webhook settings to point to `/rest/webhooks/webhook1`.
 
 ## ⚙️ Configuration
 
@@ -268,7 +274,7 @@ servicenow_fallbacks:
     email: "unknown@company.com"
   default_assignment_group:
     sys_id: "019ad92ec7230010393d265c95c260dd"
-    name: "Analytics Settings Managers"
+    name: "SNS IHUB"
 
 incident_categories:
   IT:

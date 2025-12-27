@@ -298,8 +298,8 @@ class ServiceNowAgent:
                     return group_info
             
             # If no mapping found, try to use a real group from your ServiceNow instance
-            # Based on your API response, let's use "Analytics Settings Managers"
-            fallback_group_name = "Analytics Settings Managers"
+            # Based on your API response, let's use "SNS IHUB"
+            fallback_group_name = "SNS IHUB"
             result = self.servicenow_api.lookup_group_by_name(fallback_group_name)
             
             if result.get("found"):
@@ -327,22 +327,22 @@ class ServiceNowAgent:
         
         # Use actual group from your ServiceNow instance
         return {
-            "sys_id": "019ad92ec7230010393d265c95c260dd",  # Analytics Settings Managers
-            "name": "Analytics Settings Managers"
+            "sys_id": "019ad92ec7230010393d265c95c260dd",  # SNS IHUB
+            "name": "SNS IHUB"
         }
 
     # 3. Configuration you need to add to your config file:
     CONFIG_EXAMPLE = {
         "category_to_group": {
-            "IT": "Analytics Settings Managers",
-            "General": "Analytics Settings Managers", 
+            "IT": "SNS IHUB",
+            "General": "SNS IHUB", 
             "Support": "MIF Admins",
             # Add more mappings as needed
         },
         "servicenow_fallbacks": {
             "default_assignment_group": {
                 "sys_id": "019ad92ec7230010393d265c95c260dd",
-                "name": "Analytics Settings Managers"
+                "name": "SNS IHUB"
             },
             "default_caller": {
                 "sys_id": "",  # Leave empty to create new users

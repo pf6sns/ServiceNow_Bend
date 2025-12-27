@@ -90,6 +90,9 @@ class ServiceNowAPI:
             logger.info("Creating incident in ServiceNow")
             logger.debug(f"Incident data: {json.dumps(incident_data, indent=2)}")
             
+            # Force state to New
+            incident_data['state'] = '1'
+            
             result = self._make_request("POST", "incident", data=incident_data)
             
             if result.get("success"):

@@ -46,7 +46,6 @@ Your support request has been received and a ticket has been created.
 Ticket Details:
 - Ticket Number: {ticket_number}
 - Subject: {short_description}
-- Priority: {priority}
 - Assigned to: {assigned_group}
 
 Description:

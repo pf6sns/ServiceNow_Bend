@@ -199,6 +199,20 @@ async def jira_webhook(request: Request):
                 ticket_details = result_list[0]
                 logger.info(f"ServiceNow ticket details: {ticket_details}")
                 caller_sys_id = ticket_details.get("caller_id", "")
+                logger.info(f"DEBUG: caller_id type: {type(caller_sys_id)}, value: {caller_sys_id}")
+                
+                # Handle case where caller_id is a dict (link/value)
+                if isinstance(caller_sys_id, dict):
+                    caller_sys_id = caller_sys_id.get("value", "")
+                elif isinstance(caller_sys_id, str) and caller_sys_id.strip().startswith('{'):
+                    try:
+                        import ast
+                        caller_dict = ast.literal_eval(caller_sys_id)
+                        if isinstance(caller_dict, dict):
+                            caller_sys_id = caller_dict.get("value", "")
+                            logger.info(f"DEBUG: Extracted sys_id from string dict: {caller_sys_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to parse caller_id string: {e}")
                 short_description = ticket_details.get("short_description", "Support Request")
                 
                 # Lookup caller email using caller sys_id
