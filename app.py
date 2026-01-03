@@ -222,7 +222,7 @@ class WorkflowManager:
                 log_callback("info", f"🔍 Found {technical_count} technical tickets out of {len(support_emails)}")
             
             if progress_callback:
-                progress_callback(60)
+                progress_callback(10)
             
             # Step 6: Create ServiceNow Tickets
             if log_callback:

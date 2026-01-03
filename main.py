@@ -130,6 +130,7 @@ async def jira_webhook(request: Request):
             "In Review": "2",    # In Progress
             "On Hold": "3",      # On Hold
             "Done": "6",         # Resolved
+            "Resolved": "6",     # Resolved
             "Closed": "7"        # Closed
         }
 
@@ -168,7 +169,6 @@ async def jira_webhook(request: Request):
         # --- Prepare update payload ---
         update_data = {
             "state": servicenow_state,
-            "incident_state": servicenow_state,  # Added to ensure both fields are updated
             "work_notes": f"Status updated from Jira: {issue_status}"
         }
 
