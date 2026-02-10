@@ -8,7 +8,7 @@ This application automatically monitors a Gmail inbox, classifies incoming email
 
 ## 🚀 Features
 
-- **AI-Powered Classification**: Uses Gemini 2.5 Flash to identify support-related emails
+- **AI-Powered Classification**: Uses Gemini 3 Flash Preview (`gemini-3-flash-preview`) to identify support-related emails
 - **Smart Categorization**: Automatically categorizes tickets (IT, HR, Finance, Facilities, General)
 - **Dynamic Assignment**: Assigns tickets to appropriate groups and users
 - **Email Notifications**: Sends confirmation and closure emails to users
@@ -19,7 +19,7 @@ This application automatically monitors a Gmail inbox, classifies incoming email
 ## 🛠️ Tech Stack
 
 - **Backend Framework**: FastAPI
-- **AI/ML**: Google Gemini 2.5 Flash
+- **AI/ML**: Google Gemini 3 Flash Preview (`gemini-3-flash-preview`)
 - **Email Processing**: IMAP for Gmail, SMTP for notifications
 - **Ticketing System**: ServiceNow REST API
 - **Scheduling**: APScheduler
@@ -54,7 +54,7 @@ app/
 ## 🔄 Workflow Details
 
 1. **Email Fetching**: Checks Gmail every 10 minutes for unread emails
-2. **AI Classification**: Uses Gemini to identify support-related emails
+2. **AI Classification**: Uses Gemini (model `gemini-3-flash-preview`) to identify support-related emails
 3. **Summary Generation**: Creates concise ticket descriptions from email content
 4. **Category Extraction**: Determines appropriate category and priority
 5. **Ticket Creation**: Creates ServiceNow tickets with proper assignment
@@ -318,7 +318,7 @@ The application includes comprehensive logging with:
 
 ### Modifying AI Behavior
 - Edit prompt templates in respective agent files
-- Adjust temperature and token limits for Gemini
+- Adjust temperature and token limits for the Gemini model (`gemini-3-flash-preview`)
 - Modify classification thresholds
 
 ### Custom Workflows

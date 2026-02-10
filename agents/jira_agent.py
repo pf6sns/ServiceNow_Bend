@@ -31,12 +31,35 @@ class JiraAgent:
             Dict: Result of the Jira ticket creation
         """
         try:
-            # Check if the ticket is technical using the dedicated detector
+            # Extract category information (HR/Finance/etc.) to gate Jira creation
+            category_data = ticket_data.get("category", {}) or {}
+            category_name = (category_data.get("category") or "").strip().lower()
+            
+            # Only these categories are allowed to create Jira tickets.
+            # HR, Finance, Facilities, General, etc. will NEVER go to Jira.
+            allowed_technical_categories = {
+                "it",
+                "network",
+                "infrastructure",
+                "security",
+            }
+            
+            if category_name and category_name not in allowed_technical_categories:
+                logger.info(
+                    f"JiraAgent: Category '{category_name}' is non-technical "
+                    f"(allowed: {', '.join(sorted(allowed_technical_categories))}), skipping Jira creation."
+                )
+                return {
+                    "success": False,
+                    "message": f"Ticket category '{category_name}' is non-technical; Jira not created",
+                }
+            
+            # Check if the ticket content is technical using the dedicated detector
             print("Checking if technical ticket")
             technical_result = await self.technical_detector.is_technical_ticket(ticket_data)
             
             if not technical_result.get("is_technical", False):
-                logger.info(f"Ticket is not technical, skipping Jira creation")
+                logger.info("Ticket is not technical according to TechnicalDetector, skipping Jira creation")
                 return {
                     "success": False,
                     "message": "Ticket is not technical"

@@ -1436,13 +1436,13 @@ class StreamlitUI:
                     with col2:
                         st.markdown("**Configuration:**")
                         
-                        # Agent-specific configuration info
+                        # Agent-specific configuration info (display only)
                         agent_configs = {
                             'Mail Fetcher': {'type': 'Gmail IMAP', 'protocol': 'IMAP over SSL'},
-                            'Classifier': {'type': 'AI Classification', 'model': 'OpenAI GPT-4'},
-                            'Summary Agent': {'type': 'AI Summarization', 'model': 'Gemini 2.5 Flash'},
-                            'Category Extractor': {'type': 'AI Categorization', 'model': 'OpenAI GPT-4'},
-                            'Technical Detector': {'type': 'AI Classification', 'model': 'Gemini 2.5 Flash'},
+                            'Classifier': {'type': 'AI Classification', 'model': 'Groq Llama 3.1 8B Instant'},
+                            'Summary Agent': {'type': 'AI Summarization', 'model': 'Gemini 3 Flash Preview (gemini-3-flash-preview)'},
+                            'Category Extractor': {'type': 'AI Categorization', 'model': 'Groq Llama 3.1 8B Instant'},
+                            'Technical Detector': {'type': 'AI Classification', 'model': 'Gemini 3 Flash Preview (gemini-3-flash-preview)'},
                             'ServiceNow Agent': {'type': 'REST API Client', 'endpoint': 'ServiceNow'},
                             'Jira Agent': {'type': 'REST API Client', 'endpoint': 'Jira Auto-Assign'},
                             'Notification Agent': {'type': 'SMTP Client', 'protocol': 'Email'},

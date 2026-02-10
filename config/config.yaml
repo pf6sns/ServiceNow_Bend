@@ -10,11 +10,10 @@ incident_categories:
     subcategories:
       - "Software"
       - "Hardware" 
-      - "Access Management"
       - "Database"
       - "System Performance"
-      - "Email Issues"
       - "Application Errors"
+      - "Bugs"
   
   Security:
     description: "IT Security and cybersecurity issues"
@@ -182,7 +181,7 @@ email_templates:
       ---
       Ticket ID: {ticket_number}
       Resolved: {closed_time}
-
+ 
   ticket_updated:
       subject: "Support Ticket Updated - {ticket_number} - {status}"
       body: |

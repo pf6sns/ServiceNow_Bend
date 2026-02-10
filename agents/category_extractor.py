@@ -42,17 +42,22 @@ Available Categories:
 {categories}
 
 Instructions:
-1. Analyze the email content to determine the most appropriate category
-2. Consider the subject, sender, and any available body content
-3. Match to one of the available categories listed above
+1. First, determine which TEAM should handle this ticket based on the business domain:
+   - HR team handles HR policies, leave/holiday/vacation, payroll, benefits, employee relations, onboarding/offboarding, training.
+   - Finance team handles invoices, payments, expenses, reimbursements, budgets, purchase orders.
+   - Facilities team handles office/building/maintenance, physical access, utilities, cleaning, repairs, space management.
+   - IT / Network / Infrastructure / Security teams handle software/hardware/network/system issues, bugs, outages, performance problems, login/access issues, application or server errors.
+   - If the email is general or a question not clearly in any domain, use "General".
+2. Consider the subject, sender, and any available body content.
+3. Match to one of the available categories listed above. Do NOT guess "IT" just because the content is vague – if unsure, prefer "General" or the obvious business team (e.g., HR for leave/policy).
 4. Also suggest priority and urgency levels (1-4 scale: 1=Critical, 2=High, 3=Medium, 4=Low)
 
 Category Guidelines:
-- IT/Technical: Software issues, hardware problems, network issues, system errors, login problems
-- HR/Human Resources: Employee issues, policy questions, benefits, onboarding, offboarding
-- Finance/Accounting: Invoice issues, expense reports, budget questions, payment problems
-- Facilities: Office space, maintenance, security access, parking, utilities
-- General: Anything that doesn't clearly fit other categories
+-- IT/Technical: Software issues, hardware problems, network issues, system errors, login problems, bugs, application/server errors, "not working" issues.
+-- HR/Human Resources: Employee issues, leave/holiday/vacation requests or problems, HR policy questions, payroll/salary issues, benefits, onboarding, offboarding, training.
+-- Finance/Accounting: Invoice issues, expense reports, budget questions, payment problems, reimbursements, purchase orders.
+-- Facilities: Office space, building maintenance, physical access badges, parking, utilities, cleaning, repairs, equipment and room issues.
+-- General: Anything that doesn't clearly fit other categories, or very vague requests for "help" with no clear domain.
 
 Respond in JSON format:
 {{
@@ -119,6 +124,8 @@ Response:"""
             
             # Validate and enhance category data
             category_result = self._validate_category_data(category_data)
+            # Apply deterministic business rules (HR/Finance/Facilities/IT keywords, urgency, etc.)
+            category_result = self._apply_business_rules(email_data, category_result)
             
             logger.info(f"Email categorized as: {category_result['category']} (confidence: {category_result['confidence']})")
             return category_result
@@ -286,7 +293,9 @@ Response:"""
         """Apply business rules to refine AI categorization"""
         
         subject = email_data.get("subject", "").lower()
+        body_preview = (email_data.get("body_preview", "") or "").lower()
         sender = email_data.get("from", "").lower()
+        text = f"{subject} {body_preview}"
         
         # Rule 1: Urgent keywords increase priority
         urgent_keywords = ["urgent", "critical", "emergency", "down", "outage", "broken"]
@@ -294,7 +303,36 @@ Response:"""
             ai_result["priority"] = "1"
             ai_result["urgency"] = "1"
         
-        # Rule 2: Specific sender domains may indicate category
+        # Rule 2: HR / Finance / Facilities content-based hints
+        hr_keywords = [
+            "leave policy", "leave request", "leave balance", "holiday policy",
+            "vacation policy", "vacation request", "maternity leave", "paternity leave",
+            "sick leave", "attendance policy", "hr policy", "human resources",
+            "salary", "hike", "promotion", "employee grievance", "employee issue",
+        ]
+        finance_keywords = [
+            "invoice", "payment", "expense", "reimbursement", "budget",
+            "purchase order", "po ", "finance", "accounts payable", "accounts receivable",
+        ]
+        facilities_keywords = [
+            "office", "workspace", "desk", "chair", "ac ", "air conditioner",
+            "electricity", "lift", "elevator", "parking", "leak", "maintenance request",
+            "cleaning", "housekeeping", "facility", "facilities",
+        ]
+        
+        if any(k in text for k in hr_keywords):
+            ai_result["category"] = "HR"
+            ai_result["confidence"] = "high"
+        
+        elif any(k in text for k in finance_keywords):
+            ai_result["category"] = "Finance"
+            ai_result["confidence"] = "high"
+        
+        elif any(k in text for k in facilities_keywords):
+            ai_result["category"] = "Facilities"
+            ai_result["confidence"] = "high"
+        
+        # Rule 3: Specific sender domains may indicate category
         if "hr@" in sender or "people@" in sender:
             ai_result["category"] = "HR"
             ai_result["confidence"] = "high"
@@ -307,7 +345,7 @@ Response:"""
             ai_result["category"] = "IT"
             ai_result["confidence"] = "high"
         
-        # Rule 3: Password/access issues are always IT
+        # Rule 4: Password/access issues are always IT
         if any(word in subject for word in ["password", "login", "access denied", "locked out"]):
             ai_result["category"] = "IT"
             ai_result["subcategory"] = "Access Management"

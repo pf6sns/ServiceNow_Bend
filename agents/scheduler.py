@@ -112,8 +112,8 @@ class SchedulerAgent:
                     # Generate summary using original email
                     summary_result = self.summary.generate_summary(email)
                     
-                    # Extract category using original email
-                    category_result = self.category_extractor.extract_category(email)
+                    # Extract category using AI + business rules (HR/Finance/Facilities/IT)
+                    category_result = self.category_extractor.extract_category_with_rules(email)
                     
                     # Create ServiceNow ticket
                     ticket_data = {

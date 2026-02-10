@@ -84,7 +84,7 @@ Classification:"""
             category = category_data.get("category", "")
             subcategory = category_data.get("subcategory", "")
             
-            # Log classification attempt
+            # Log classification attempt (LLM-based only; no rule-based shortcut)
             logger.info(f"🔍 Technical Detection - Analyzing ticket: '{subject[:50]}...'")
             logger.debug(f"Category: {category}, Body preview: {body[:100]}...")
             
@@ -96,7 +96,7 @@ Classification:"""
                 subcategory=subcategory
             )
             
-            # Get classification from Groq
+            # Get classification from Groq (LLM-based)
             message = self.client.chat.completions.create(
                 model=self.model,
                 max_tokens=100,
@@ -106,8 +106,8 @@ Classification:"""
             
             classification = message.choices[0].message.content.strip().upper()
             
-            # Parse result
-            is_technical = classification == "TECHNICAL"
+            # Parse result exactly as model returns: TECHNICAL vs NON_TECHNICAL
+            is_technical = (classification == "TECHNICAL")
             
             # Log result
             result_text = "✅ TECHNICAL" if is_technical else "❌ NON-TECHNICAL"
