@@ -231,7 +231,7 @@ class ConfigLoader:
                 "SERVICENOW_INSTANCE_URL",
                 "SERVICENOW_USERNAME",
                 "SERVICENOW_PASSWORD",
-                "GEMINI_API_KEY",
+                "GROQ_API_KEY",
                 "SMTP_USERNAME",
                 "SMTP_PASSWORD"
             ]
@@ -327,7 +327,7 @@ class ConfigLoader:
                 "config_file": self.config_file,
                 "config_sections": list(self.config_data.keys()),
                 "environment_vars_count": len([k for k in os.environ.keys() if not any(s in k.upper() for s in ['PASSWORD', 'SECRET', 'KEY', 'TOKEN'])]),
-                "secrets_configured": len([k for k in ['GMAIL_EMAIL', 'SERVICENOW_INSTANCE_URL', 'GEMINI_API_KEY'] if self.get_secret(k)]),
+                "secrets_configured": len([k for k in ['GMAIL_EMAIL', 'SERVICENOW_INSTANCE_URL', 'GROQ_API_KEY'] if self.get_secret(k)]),
                 "validation_status": self.validate_config()
             }
         except Exception as e:
@@ -351,8 +351,8 @@ SERVICENOW_INSTANCE_URL=https://your-instance.service-now.com
 SERVICENOW_USERNAME=your-username
 SERVICENOW_PASSWORD=your-password
 
-# Gemini AI Configuration
-GEMINI_API_KEY=your-gemini-api-key
+# GROQ AI Configuration
+GROQ_API_KEY=your-groq-api-key
 
 # SMTP Configuration
 SMTP_SERVER=smtp.gmail.com

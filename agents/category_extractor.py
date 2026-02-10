@@ -1,12 +1,10 @@
 """
-Category Extractor Agent - Uses Gemini 2.5 Flash to extract incident categories (IT, HR, Finance, etc.)
+Category Extractor Agent - Uses Groq API to extract incident categories (IT, HR, Finance, etc.)
 """
 
 import logging
 from typing import Dict, Any
-import google.generativeai as genai
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage
+from groq import Groq
 from langchain_core.prompts import PromptTemplate
 import re
 import json
@@ -15,22 +13,16 @@ from utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 class CategoryExtractorAgent:
-    """Agent responsible for extracting incident categories using Gemini 2.5 Flash"""
+    """Agent responsible for extracting incident categories using Groq API"""
     
     def __init__(self, config):
         self.config = config
         
-        # Configure Gemini API
-        api_key = self.config.get_secret("GEMINI_API_KEY")
-        genai.configure(api_key=api_key)
-        
-        # Initialize Gemini model
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",  # Using Gemini 2.5 Flash equivalent
-            google_api_key=api_key,
-            temperature=0.1,  # Low temperature for consistent categorization
-            max_tokens=200
-        )
+        # Initialize Groq client
+        api_key = self.config.get_secret("GROQ_API_KEY")
+        self.client = Groq(api_key=api_key)
+        # Use Llama-3.1-8B-Instant model (replacement for decommissioned Mixtral)
+        self.model = "Llama-3.1-8B-Instant"
         
         # Get available categories from config
         self.available_categories = self.config.get_setting("incident_categories", {})
@@ -103,9 +95,15 @@ Response:"""
                 categories=categories_text
             )
             
-            # Get categorization from Gemini
-            response = self.llm.invoke([HumanMessage(content=prompt_text)])
-            result_text = response.content.strip()
+            # Get categorization from Groq
+            message = self.client.chat.completions.create(
+                model=self.model,
+                max_tokens=500,
+                temperature=0.1,
+                messages=[{"role": "user", "content": prompt_text}]
+            )
+            
+            result_text = message.choices[0].message.content.strip()
             
             # Parse JSON response
             import json

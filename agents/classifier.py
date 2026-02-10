@@ -1,12 +1,10 @@
 """
-Classifier Agent - Uses Gemini 2.5 Flash to classify emails as support-related or not
+Classifier Agent - Uses Groq API to classify emails as support-related or not
 """
 
 import logging
 from typing import Dict, Any
-import google.generativeai as genai
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage
+from groq import Groq
 from langchain_core.prompts import PromptTemplate
 
 from utils.logger import setup_logger
@@ -14,22 +12,16 @@ from utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 class ClassifierAgent:
-    """Agent responsible for classifying emails as support-related using Gemini 2.5 Flash"""
+    """Agent responsible for classifying emails as support-related using Groq API"""
     
     def __init__(self, config):
         self.config = config
         
-        # Configure Gemini API
-        api_key = self.config.get_secret("GEMINI_API_KEY")
-        genai.configure(api_key=api_key)
-        
-        # Initialize Gemini model
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",  # Using Gemini 2.5 Flash equivalent
-            google_api_key=api_key,
-            temperature=0.1,  # Low temperature for consistent classification
-            max_tokens=100
-        )
+        # Initialize Groq client
+        api_key = self.config.get_secret("GROQ_API_KEY")
+        self.client = Groq(api_key=api_key)
+        # Use Llama-3.1-8B-Instant model for classification
+        self.model = "Llama-3.1-8B-Instant"
         
         # Classification prompt template
         self.classification_prompt = PromptTemplate(
@@ -94,10 +86,16 @@ Classification:"""
                 sender=sender
             )
             
-            # Get classification from Gemini
-            response = self.llm.invoke([HumanMessage(content=prompt_text)])
-            classification = response.content.strip().upper()
-            print("Classification",classification)
+            # Get classification from Groq
+            message = self.client.chat.completions.create(
+                model=self.model,
+                max_tokens=100,
+                temperature=0.1,
+                messages=[{"role": "user", "content": prompt_text}]
+            )
+            
+            classification = message.choices[0].message.content.strip().upper()
+            print("Classification", classification)
             
             # Parse result
             is_support = classification == "SUPPORT"

@@ -254,8 +254,8 @@ SERVICENOW_INSTANCE_URL=https://your-instance.service-now.com
 SERVICENOW_USERNAME=your-username
 SERVICENOW_PASSWORD=your-password
 
-# Gemini AI Configuration
-GEMINI_API_KEY=your-gemini-api-key
+# GROQ AI Configuration
+GROQ_API_KEY=your-groq-api-key
 
 # SMTP Configuration
 SMTP_SERVER=smtp.gmail.com

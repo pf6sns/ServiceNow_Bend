@@ -17,7 +17,7 @@ class JiraAgent:
     
     def __init__(self, config):
         self.config = config
-        self.jira_endpoint = "http://127.0.0.1:8001/jira/auto-assign"
+        self.jira_endpoint = "http://127.0.0.1:8000/jira/auto-assign"
         self.technical_detector = TechnicalDetectorAgent(config)
         
     async def create_jira_ticket(self, ticket_data: Dict[str, Any]) -> Dict[str, Any]:

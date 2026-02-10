@@ -48,12 +48,12 @@ python-dotenv
 pydantic
 PyYAML
 
-# Google Generative AI (Gemini)
-google-generativeai
+# Groq AI
+groq
+langchain-groq
 
 # LangChain and LangGraph
 langchain
-langchain-google-genai
 langgraph
 
 # HTTP Client

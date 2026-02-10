@@ -4,6 +4,7 @@ Main application entry point with background scheduler for agentic workflow
 """
 
 import logging
+import json
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException , Request
@@ -92,10 +93,16 @@ def extract_servicenow_ticket_id(jira_title: str) -> str:
         ServiceNow ticket ID or empty string if not found
     """
     import re
-    # Look for text in square brackets at the beginning of the title
-    match = re.match(r'^\[(.*?)\]', jira_title)
-    if match:
-        return match.group(1).strip()
+    # First, look for an explicit [INCxxxxx] pattern anywhere
+    m = re.search(r'\[?(INC\d+)\]?', jira_title, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).upper().strip()
+
+    # Fallback: look for INC followed by digits anywhere in the title
+    m2 = re.search(r'(INC\d+)', jira_title, flags=re.IGNORECASE)
+    if m2:
+        return m2.group(1).upper().strip()
+
     return ""
 
 @app.post("/rest/webhooks/webhook1")
@@ -107,6 +114,11 @@ async def jira_webhook(request: Request):
     try:
         # --- Parse webhook payload ---
         data = await request.json()
+        # Debug: log incoming webhook payload (truncate large payloads)
+        try:
+            logger.debug(f"Incoming Jira webhook payload: {json.dumps(data)[:2000]}")
+        except Exception:
+            logger.debug("Incoming Jira webhook payload (could not serialize) - raw object logged")
         issue_data = data.get("issue", {})
         issue_fields = issue_data.get("fields", {})
         issue_title = issue_fields.get("summary", "")
@@ -317,7 +329,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
+        port=8001,
         reload=False,  # Disable reload in production
         log_level="info"
     )

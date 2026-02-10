@@ -1,12 +1,10 @@
 """
-Technical Detector Agent - Uses Gemini 2.5 Flash to determine if a ticket is technical in nature
+Technical Detector Agent - Uses Groq API to determine if a ticket is technical in nature
 """
 
 import logging
 from typing import Dict, Any
-import google.generativeai as genai
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage
+from groq import Groq
 from langchain_core.prompts import PromptTemplate
 
 from utils.logger import setup_logger
@@ -14,22 +12,16 @@ from utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 class TechnicalDetectorAgent:
-    """Agent responsible for determining if a ticket is technical in nature using Gemini 2.5 Flash"""
+    """Agent responsible for determining if a ticket is technical in nature using Groq API"""
     
     def __init__(self, config):
         self.config = config
         
-        # Configure Gemini API
-        api_key = self.config.get_secret("GEMINI_API_KEY")
-        genai.configure(api_key=api_key)
-        
-        # Initialize Gemini model
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",  # Using Gemini 2.5 Flash equivalent
-            google_api_key=api_key,
-            temperature=0.1,  # Low temperature for consistent classification
-            max_tokens=100
-        )
+        # Initialize Groq client
+        api_key = self.config.get_secret("GROQ_API_KEY")
+        self.client = Groq(api_key=api_key)
+        # Use Llama-3.1-8B-Instant model (replacement for decommissioned Mixtral)
+        self.model = "Llama-3.1-8B-Instant"
         
         # Technical detection prompt template
         self.technical_prompt = PromptTemplate(
@@ -104,9 +96,15 @@ Classification:"""
                 subcategory=subcategory
             )
             
-            # Get classification from Gemini
-            response = self.llm.invoke([HumanMessage(content=prompt_text)])
-            classification = response.content.strip().upper()
+            # Get classification from Groq
+            message = self.client.chat.completions.create(
+                model=self.model,
+                max_tokens=100,
+                temperature=0.1,
+                messages=[{"role": "user", "content": prompt_text}]
+            )
+            
+            classification = message.choices[0].message.content.strip().upper()
             
             # Parse result
             is_technical = classification == "TECHNICAL"

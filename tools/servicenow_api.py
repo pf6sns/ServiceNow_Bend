@@ -58,6 +58,13 @@ class ServiceNowAPI:
         # Ensure we don't have double slashes in the URL
         url = f"{self.api_base}{endpoint}"
         logger.debug(f"Making {method} request to: {url}")
+        if params:
+            logger.debug(f"Request params: {json.dumps(params)}")
+        if data:
+            try:
+                logger.debug(f"Request data: {json.dumps(data)[:2000]}")
+            except Exception:
+                logger.debug("Request data present but could not be serialized for logging")
         
         try:
             response = requests.request(
@@ -69,10 +76,22 @@ class ServiceNowAPI:
                 params=params,
                 timeout=30
             )
+            # Log response status and body for debugging
+            logger.debug(f"ServiceNow response status: {response.status_code}")
+            try:
+                logger.debug(f"ServiceNow response body: {response.text[:3000]}")
+            except Exception:
+                logger.debug("ServiceNow response body present but could not be serialized")
             response.raise_for_status()
             return {"success": True, "data": response.json()}
         except requests.exceptions.RequestException as e:
-            return {"success": False, "error": str(e)}
+            # Attempt to include response text if available
+            try:
+                err_text = e.response.text if getattr(e, 'response', None) is not None else str(e)
+            except Exception:
+                err_text = str(e)
+            logger.error(f"ServiceNow request error: {err_text}")
+            return {"success": False, "error": err_text}
 
     # In servicenow_api.py, make sure the create_incident method is working correctly
 
