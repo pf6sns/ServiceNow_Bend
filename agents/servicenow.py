@@ -40,6 +40,20 @@ class ServiceNowAgent:
             summary_data = ticket_data.get("summary", {})
             category_data = ticket_data.get("category", {})
             
+            # 1. DE-DUPLICATION CHECK
+            message_id = email_data.get("message_id")
+            if message_id:
+                # Check if incident with this correlation_id already exists
+                existing = self._check_duplicate_by_correlation_id(message_id)
+                if existing:
+                    logger.info(f"DUPLICATE DETECTED: Ticket {existing['number']} already exists for email {message_id}")
+                    return {
+                        "success": True,
+                        "ticket_number": existing.get("number"),
+                        "sys_id": existing.get("sys_id"),
+                        "already_exists": True
+                    }
+
             logger.info(f"Creating ServiceNow incident for {email_data.get('from', 'unknown')}")
             
             # Lookup caller information
@@ -64,6 +78,7 @@ class ServiceNowAgent:
                 "priority": str(category_data.get("priority", 3)),
                 "urgency": str(category_data.get("urgency", 3)),
                 "category": self._map_category_to_servicenow(category_data.get("category", "inquiry")),
+                "correlation_id": message_id # Use message_id for de-duplication
             }
             
             # Add caller only if found
@@ -110,6 +125,25 @@ class ServiceNowAgent:
                 "success": False,
                 "error": str(e)
             }
+
+    def _check_duplicate_by_correlation_id(self, correlation_id: str) -> Optional[Dict[str, Any]]:
+        """Check if an incident with the given correlation_id already exists"""
+        try:
+            params = {
+                "sysparm_query": f"correlation_id={correlation_id}",
+                "sysparm_limit": "1",
+                "sysparm_fields": "sys_id,number"
+            }
+            result = self.servicenow_api._make_request("GET", "incident", params=params)
+            
+            if result.get("success"):
+                incidents = result.get("data", {}).get("result", [])
+                if incidents:
+                    return incidents[0]
+            return None
+        except Exception as e:
+            logger.error(f"Error checking duplicate correlation_id: {e}")
+            return None
     def _get_user_from_assignment_group(self, group_sys_id: str) -> Dict[str, Any]:
         """Get a user from the assignment group for ticket assignment"""
         if not group_sys_id:

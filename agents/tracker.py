@@ -181,9 +181,30 @@ class TrackerAgent:
                 logger.info(f"Closure notification sent for ticket {ticket_number}")
             else:
                 logger.error(f"Failed to send closure notification for {ticket_number}: {result.get('error')}")
+            
+            # Sync to Jira if it was technical
+            await self._sync_to_jira(ticket_number, "Done")
                 
         except Exception as e:
             logger.error(f"Error sending closure notification for {sys_id}: {e}")
+
+    async def _sync_to_jira(self, ticket_number: str, jira_status: str):
+        """Sync ServiceNow status change to linked Jira issue"""
+        try:
+            jira_sync_url = "http://127.0.0.1:8000/jira/sync-servicenow-status"
+            payload = {
+                "servicenow_id": ticket_number,
+                "status": jira_status
+            }
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.post(jira_sync_url, json=payload) as response:
+                    if response.status == 200:
+                        logger.info(f"Successfully synced {ticket_number} status to Jira as {jira_status}")
+                    else:
+                        logger.warning(f"Failed to sync {ticket_number} status to Jira. Status: {response.status}")
+        except Exception as e:
+            logger.error(f"Error syncing to Jira: {e}")
     
     async def _send_status_update_notification(self, sys_id: str, ticket_data: Dict[str, Any], 
                                          status_result: Dict[str, Any], 

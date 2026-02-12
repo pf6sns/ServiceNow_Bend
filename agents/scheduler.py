@@ -33,6 +33,7 @@ class WorkflowState(TypedDict):
     # Metadata
     timestamp: str
     last_check: str
+    manual: bool # Added flag for manual trigger
 
 class SchedulerAgent:
     """Main scheduler agent that orchestrates the workflow using LangGraph StateGraph"""
@@ -61,15 +62,21 @@ class SchedulerAgent:
             """Node: Fetch emails from Gmail"""
             try:
                 logger.info("Fetching emails from Gmail...")
-                # Get the actual email objects
-                raw_emails = self.mail_fetcher.fetch_unread_emails(
-                    since_time=self.last_check_time
-                )
+                
+                # Check if manual trigger
+                if state.get("manual"):
+                     # Fetch recent emails regardless of unread status
+                     raw_emails = self.mail_fetcher.fetch_all_recent_emails(limit=50)
+                else:
+                    # Get the actual email objects (unread only)
+                    raw_emails = self.mail_fetcher.fetch_unread_emails(
+                        since_time=self.last_check_time
+                    )
                 
                 # Store the original email objects directly
                 state["emails"] = raw_emails
                 state["total_emails"] = len(raw_emails)
-                logger.info(f"Fetched {len(raw_emails)} unread emails")
+                logger.info(f"Fetched {len(raw_emails)} emails")
                 return state
             except Exception as e:
                 logger.error(f"Error fetching emails: {e}")
@@ -84,6 +91,11 @@ class SchedulerAgent:
             support_emails = []
             for email in state["emails"]:
                 try:
+                    # Skip emails explicitly flagged as ignore (system/bounces)
+                    if email.get("ignore"):
+                        logger.info(f"Skipping ignored system email: '{email.get('subject', 'No subject')}'")
+                        continue
+
                     # Pass the original email data to classifier
                     is_support = self.classifier.classify_email(email)
                     if is_support:
@@ -153,6 +165,12 @@ class SchedulerAgent:
                             ticket_data["jira_ticket"] = jira_result.get("jira_ticket")
                         else:
                             logger.info(f"Ticket {ticket_result.get('ticket_number')} not technical or Jira creation failed: {jira_result.get('message')}")
+                        
+                        # Mark email as read so we don't process it again
+                        imap_id = email.get("imap_id")
+                        if imap_id:
+                            self.mail_fetcher.mark_email_as_read(imap_id)
+                            logger.info(f"Marked email {email.get('from')} as processed/read")
                     
                 except Exception as e:
                     logger.error(f"Error processing email: {e}")
@@ -199,10 +217,10 @@ class SchedulerAgent:
         
         return workflow.compile()
     
-    async def trigger_workflow(self):
+    async def trigger_workflow(self, manual: bool = False):
         """Trigger the complete agentic workflow"""
         try:
-            logger.info("Starting agentic workflow...")
+            logger.info(f"Starting agentic workflow (Manual: {manual})...")
             start_time = datetime.now()
             
             # Initialize workflow state
@@ -213,7 +231,8 @@ class SchedulerAgent:
                 total_emails=0,
                 error="",
                 timestamp=start_time.isoformat(),
-                last_check=self.last_check_time.isoformat()
+                last_check=self.last_check_time.isoformat(),
+                manual=manual
             )
             
             # Execute the workflow
@@ -232,6 +251,8 @@ class SchedulerAgent:
             
             # Also trigger tracker check for existing tickets
             await self.trigger_tracker_check()
+            
+            return result
             
         except Exception as e:
             logger.error(f"Workflow execution failed: {e}")

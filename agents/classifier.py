@@ -55,6 +55,7 @@ Instructions:
    - Spam or promotional content
    - Meeting invitations (unless about support)
    - General announcements (unless requesting support)
+   - **System emails, auto-replies, and delivery failure notifications (e.g., mailer-daemon, out of office)**
 
 Respond with exactly one word: "SUPPORT" or "NOT_SUPPORT"
 
@@ -156,12 +157,13 @@ Classification:"""
         spam_subjects = [
             "unsubscribe", "promotion", "sale", "offer", "discount",
             "free", "winner", "congratulations", "click here",
-            "limited time", "act now", "bonus", "cash", "prize"
+            "limited time", "act now", "bonus", "cash", "prize",
+            "delivery status notification", "failure notice", "returning message to sender"
         ]
         
         spam_senders = [
             "noreply", "no-reply", "donotreply", "marketing",
-            "newsletter", "promo", "offers"
+            "newsletter", "promo", "offers", "mailer-daemon", "postmaster"
         ]
         
         # Check subject for spam indicators
