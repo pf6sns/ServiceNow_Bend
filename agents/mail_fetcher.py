@@ -82,6 +82,11 @@ class MailFetcherAgent:
             # Parse sender email
             sender_name, sender_email = parseaddr(from_header)
             
+            # Check if this email should be ignored
+            should_ignore = self._should_ignore_email(subject, sender_email)
+            if should_ignore:
+                logger.info(f"Ignoring system/bounce email from {sender_email}: {subject}")
+
             # Privacy-focused: only read subject initially
             email_data = {
                 "subject": subject,
@@ -89,7 +94,8 @@ class MailFetcherAgent:
                 "sender_name": sender_name,
                 "date": date_header,
                 "message_id": message_id,
-                "body_preview": None  # Only populated if subject is vague
+                "body_preview": None,  # Only populated if subject is vague
+                "ignore": should_ignore
             }
             
             # Check if subject is vague or empty (fallback to body preview)
@@ -111,6 +117,41 @@ class MailFetcherAgent:
                 "body_preview": None
             }
     
+    def _should_ignore_email(self, subject: str, sender: str) -> bool:
+        """Identify system emails, bounces, and automated notifications that should be ignored"""
+        subject_lower = subject.lower().strip()
+        sender_lower = sender.lower().strip()
+        
+        # 1. Block known system/bounce senders
+        ignored_senders = [
+            "mailer-daemon@googlemail.com",
+            "mailer-daemon@gmail.com",
+            "postmaster@",
+            "postmaster@google.com",
+            "no-reply@accounts.google.com",
+            "cloudplatform-noreply@google.com",
+            "mailer-daemon@googlemail.com"
+        ]
+        
+        if any(ignored in sender_lower for ignored in ignored_senders):
+            return True
+            
+        # 2. Block bounce-related subjects
+        ignored_subjects = [
+            "delivery status notification",
+            "failure notice",
+            "undeliverable:",
+            "returned mail:",
+            "out of office:",
+            "automatic reply:",
+            "vacation response:"
+        ]
+        
+        if any(ignored in subject_lower for ignored in ignored_subjects):
+            return True
+            
+        return False
+
     def _is_subject_vague(self, subject: str) -> bool:
         """Determine if email subject is too vague and needs body preview"""
         if not subject or len(subject.strip()) < 3:
@@ -283,6 +324,7 @@ class MailFetcherAgent:
         """Mark specific email as read"""
         mail = None
         try:
+            # Need to create new connection as previous one might be closed
             mail = self._connect_to_gmail()
             mail.select("INBOX")
             
@@ -292,6 +334,60 @@ class MailFetcherAgent:
             
         except Exception as e:
             logger.error(f"Error marking email as read: {e}")
+        finally:
+            if mail:
+                try:
+                    mail.close()
+                    mail.logout()
+                except:
+                    pass
+
+    def fetch_all_recent_emails(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Fetch the most recent N emails regardless of read status (for manual sync)"""
+        emails = []
+        mail = None
+        try:
+            logger.info(f"Fetching last {limit} emails from Gmail (manual sync deep probe)...")
+            mail = self._connect_to_gmail()
+            mail.select("INBOX")
+            
+            # Search all emails
+            # 'ALL' might be too much, so we fetch messages by ID (highest ID = newest)
+            # Fetch last N message IDs directly
+            
+            # Get number of messages
+            status, response = mail.search(None, 'ALL')
+            if status != 'OK':
+                return []
+                
+            all_ids = response[0].split()
+            last_n_ids = all_ids[-limit:] if len(all_ids) > limit else all_ids
+            # Reverse to process newest first (optional, but logical for "recent")
+            # But we usually process list in order.
+            
+            logger.info(f"Found {len(last_n_ids)} recent emails")
+            
+            for msg_id in last_n_ids:
+                try:
+                    msg_id_str = msg_id.decode()
+                    result, msg_data = mail.fetch(msg_id, "(RFC822)")
+                    if result != 'OK':
+                        continue
+                        
+                    raw_email = msg_data[0][1]
+                    email_message = message_from_bytes(raw_email)
+                    email_data = self._extract_email_content(email_message)
+                    email_data["imap_id"] = msg_id_str
+                    emails.append(email_data)
+                    logger.info(f"Fetched email: {email_data['subject'][:30]}...")
+                except Exception as e:
+                    logger.error(f"Error fetching email {msg_id}: {e}")
+                    
+            return emails
+            
+        except Exception as e:
+            logger.error(f"Error in fetch_all_recent_emails: {e}")
+            return []
         finally:
             if mail:
                 try:

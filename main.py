@@ -14,6 +14,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from agents.scheduler import SchedulerAgent
 from utils.logger import setup_logger
 from tools.config_loader import ConfigLoader
+from routes import servicenow_routes
 
 # Setup logging
 logger = setup_logger(__name__)
@@ -81,6 +82,20 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# Add CORS middleware to allow frontend requests
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],  # Frontend URLs
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include API routes
+app.include_router(servicenow_routes.router)
 
 @app.get("/")
 async def root():
@@ -319,20 +334,71 @@ async def health_check():
         logger.error(f"Health check failed: {e}")
         raise HTTPException(status_code=500, detail=f"Health check failed: {str(e)}")
 
+from pydantic import BaseModel
+
+class ManualTriggerRequest(BaseModel):
+    manual: bool = True
+
 @app.post("/trigger-manual")
-async def trigger_manual():
+async def trigger_manual(request: ManualTriggerRequest = ManualTriggerRequest(manual=True)):
     """Manual trigger endpoint for testing purposes"""
     try:
         if scheduler_agent:
-            await scheduler_agent.trigger_workflow()
-            return {"status": "success", "message": "Workflow triggered manually"}
+            # Pass manual flag to trigger_workflow
+            result = await scheduler_agent.trigger_workflow(manual=request.manual)
+            return {"status": "success", "message": "Workflow triggered manually", "data": result}
         else:
             raise HTTPException(status_code=500, detail="Scheduler agent not initialized")
     except Exception as e:
         logger.error(f"Manual trigger failed: {e}")
         raise HTTPException(status_code=500, detail=f"Manual trigger failed: {str(e)}")
 
-
+@app.post("/sync-resolved")
+async def sync_resolved_tickets():
+    """Fetch resolved tickets from ServiceNow and sync their status to Jira"""
+    try:
+        from tools.servicenow_api import ServiceNowAPI
+        from tools.config_loader import ConfigLoader
+        import aiohttp
+        
+        config = ConfigLoader()
+        sn_api = ServiceNowAPI(config)
+        
+        # 1. Fetch Resolved tickets from ServiceNow
+        # State 6 = Resolved
+        res = sn_api._make_request("GET", "incident", params={
+            "sysparm_query": "state=6",
+            "sysparm_limit": 50,
+            "sysparm_fields": "number,state"
+        })
+        
+        if not res.get("success"):
+            return {"success": False, "message": "Failed to fetch from ServiceNow"}
+            
+        tickets = res.get("data", {}).get("result", [])
+        synced = []
+        
+        # 2. Sync each to Jira (Port 8000 is Jira_Bend)
+        jira_sync_url = "http://127.0.0.1:8000/jira/sync-servicenow-status"
+        async with aiohttp.ClientSession() as session:
+            for t in tickets:
+                ticket_number = t.get("number")
+                payload = {"servicenow_id": ticket_number, "status": "Done"}
+                try:
+                    async with session.post(jira_sync_url, json=payload, timeout=5) as response:
+                        if response.status == 200:
+                            synced.append(ticket_number)
+                except Exception as sync_e:
+                    logger.warning(f"Failed to sync {ticket_number} to Jira: {sync_e}")
+        
+        return {
+            "success": True, 
+            "message": f"Synced {len(synced)} tickets to Jira",
+            "synced_tickets": synced
+        }
+    except Exception as e:
+        logger.error(f"Sync failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Import routes
