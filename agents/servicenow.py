@@ -4,10 +4,12 @@ Handles dynamic user/group lookups with fallback to config defaults
 """
 
 import logging
+import hashlib
 from typing import Dict, Any, Optional, List
+from urllib.parse import quote
 import httpx
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import random
 
 from tools.servicenow_api import ServiceNowAPI
@@ -40,19 +42,41 @@ class ServiceNowAgent:
             summary_data = ticket_data.get("summary", {})
             category_data = ticket_data.get("category", {})
             
-            # 1. DE-DUPLICATION CHECK
-            message_id = email_data.get("message_id")
+            # 1. DE-DUPLICATION: use Message-ID or fallback key (subject+from+date) so we never create duplicates
+            message_id = (email_data.get("message_id") or "").strip()
+            subject = (email_data.get("subject") or "")[:200]
+            from_addr = (email_data.get("from") or "").strip()
+            date_header = (email_data.get("date") or "").strip()
             if message_id:
-                # Check if incident with this correlation_id already exists
-                existing = self._check_duplicate_by_correlation_id(message_id)
-                if existing:
-                    logger.info(f"DUPLICATE DETECTED: Ticket {existing['number']} already exists for email {message_id}")
-                    return {
-                        "success": True,
-                        "ticket_number": existing.get("number"),
-                        "sys_id": existing.get("sys_id"),
-                        "already_exists": True
-                    }
+                correlation_id = message_id
+            else:
+                # Fallback when email has no Message-ID: same email content => same key
+                correlation_id = hashlib.sha256(
+                    f"{subject}|{from_addr}|{date_header}".encode("utf-8")
+                ).hexdigest()[:64]
+                logger.info(f"No Message-ID; using fallback correlation_id (hash of subject+from+date) for deduplication")
+
+            existing = self._check_duplicate_by_correlation_id(correlation_id)
+            if existing:
+                logger.info(f"DUPLICATE DETECTED: Ticket {existing.get('number')} already exists for correlation_id (skipping create)")
+                return {
+                    "success": True,
+                    "ticket_number": existing.get("number"),
+                    "sys_id": existing.get("sys_id"),
+                    "already_exists": True
+                }
+
+            # 2. FALLBACK: if correlation_id is not stored in ServiceNow, check by same short_description in last 48h
+            short_desc = (ticket_data.get("short_description") or "Support Request")[:160]
+            existing_by_desc = self._check_duplicate_by_short_description_recent(short_desc, hours=48)
+            if existing_by_desc:
+                logger.info(f"DUPLICATE DETECTED (by description): Ticket {existing_by_desc.get('number')} already exists for same request (skipping create)")
+                return {
+                    "success": True,
+                    "ticket_number": existing_by_desc.get("number"),
+                    "sys_id": existing_by_desc.get("sys_id"),
+                    "already_exists": True
+                }
 
             logger.info(f"Creating ServiceNow incident for {email_data.get('from', 'unknown')}")
             
@@ -70,7 +94,7 @@ class ServiceNowAgent:
                 assigned_user = self._get_user_from_assignment_group(assignment_group.get("sys_id"))
                 logger.info(f"Assigned user lookup result: {assigned_user}")
             
-            # Prepare incident data with validation
+            # Prepare incident data with validation (always set correlation_id for future deduplication)
             incident_data = {
                 "short_description": ticket_data.get("short_description", "Support Request")[:160],
                 "description": self._build_incident_description(ticket_data),
@@ -78,7 +102,7 @@ class ServiceNowAgent:
                 "priority": str(category_data.get("priority", 3)),
                 "urgency": str(category_data.get("urgency", 3)),
                 "category": self._map_category_to_servicenow(category_data.get("category", "inquiry")),
-                "correlation_id": message_id # Use message_id for de-duplication
+                "correlation_id": correlation_id
             }
             
             # Add caller only if found
@@ -127,15 +151,21 @@ class ServiceNowAgent:
             }
 
     def _check_duplicate_by_correlation_id(self, correlation_id: str) -> Optional[Dict[str, Any]]:
-        """Check if an incident with the given correlation_id already exists"""
+        """Check if an incident with the given correlation_id already exists.
+        Encodes correlation_id for query so special characters (e.g. < and > in Message-ID) do not break the query.
+        """
+        if not correlation_id:
+            return None
         try:
+            # ServiceNow query values with special characters must be encoded (e.g. Message-ID contains < and >)
+            encoded = quote(correlation_id, safe="")
             params = {
-                "sysparm_query": f"correlation_id={correlation_id}",
+                "sysparm_query": f"correlation_id={encoded}",
                 "sysparm_limit": "1",
                 "sysparm_fields": "sys_id,number"
             }
             result = self.servicenow_api._make_request("GET", "incident", params=params)
-            
+
             if result.get("success"):
                 incidents = result.get("data", {}).get("result", [])
                 if incidents:
@@ -144,6 +174,36 @@ class ServiceNowAgent:
         except Exception as e:
             logger.error(f"Error checking duplicate correlation_id: {e}")
             return None
+
+    def _check_duplicate_by_short_description_recent(self, short_description: str, hours: int = 48) -> Optional[Dict[str, Any]]:
+        """Fallback duplicate check: find an incident with same short_description created in the last N hours.
+        Use when correlation_id is not stored or not available (e.g. field missing in ServiceNow)."""
+        if not short_description or not short_description.strip():
+            return None
+        try:
+            # Use first 60 chars for match; escape single quotes for ServiceNow ('' inside quoted string)
+            prefix = short_description.strip()[:60].replace("'", "''")
+            if not prefix:
+                return None
+            since = (datetime.utcnow() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+            # ServiceNow encoded query: short_description starts with 'prefix' and created since ...
+            query = f"short_descriptionSTARTSWITH'{prefix}'^sys_created_on>={since}"
+            params = {
+                "sysparm_query": query,
+                "sysparm_limit": "1",
+                "sysparm_fields": "sys_id,number",
+                "sysparm_order_by": "sys_created_onDESC"
+            }
+            result = self.servicenow_api._make_request("GET", "incident", params=params)
+            if result.get("success"):
+                incidents = result.get("data", {}).get("result", [])
+                if incidents:
+                    return incidents[0]
+            return None
+        except Exception as e:
+            logger.warning(f"Fallback duplicate check by short_description failed: {e}")
+            return None
+
     def _get_user_from_assignment_group(self, group_sys_id: str) -> Dict[str, Any]:
         """Get a user from the assignment group for ticket assignment"""
         if not group_sys_id:

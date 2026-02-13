@@ -201,7 +201,8 @@ async def jira_webhook(request: Request):
             return {"message": f"Incident not found: {servicenow_ticket_id}"}
 
         sys_id = result_list[0].get("sys_id")
-        logger.info(f"Found ServiceNow incident with sys_id: {sys_id}")
+        current_sn_state = result_list[0].get("state", "")
+        logger.info(f"Found ServiceNow incident with sys_id: {sys_id}, current state: {current_sn_state}")
 
         # --- Prepare update payload ---
         update_data = {
@@ -229,81 +230,85 @@ async def jira_webhook(request: Request):
                 f"✅ Updated ServiceNow incident {servicenow_ticket_id} "
                 f"to state {servicenow_state} ({issue_status})"
             )
+
+            # Only send email when status actually changed (not when re-applying same status)
+            state_actually_changed = (current_sn_state != servicenow_state)
             
-            # --- Send email notification to ticket recipients ---
-            try:
-                # Get ticket details for email notification
-                ticket_details = result_list[0]
-                logger.info(f"ServiceNow ticket details: {ticket_details}")
-                caller_sys_id = ticket_details.get("caller_id", "")
-                logger.info(f"DEBUG: caller_id type: {type(caller_sys_id)}, value: {caller_sys_id}")
-                
-                # Handle case where caller_id is a dict (link/value)
-                if isinstance(caller_sys_id, dict):
-                    caller_sys_id = caller_sys_id.get("value", "")
-                elif isinstance(caller_sys_id, str) and caller_sys_id.strip().startswith('{'):
-                    try:
-                        import ast
-                        caller_dict = ast.literal_eval(caller_sys_id)
-                        if isinstance(caller_dict, dict):
-                            caller_sys_id = caller_dict.get("value", "")
-                            logger.info(f"DEBUG: Extracted sys_id from string dict: {caller_sys_id}")
-                    except Exception as e:
-                        logger.warning(f"Failed to parse caller_id string: {e}")
-                short_description = ticket_details.get("short_description", "Support Request")
-                
-                # Lookup caller email using caller sys_id
-                caller_email = ""
-                if caller_sys_id:
-                    logger.info(f"Looking up caller email for sys_id: {caller_sys_id}")
-                    caller_lookup = servicenow_api.lookup_user_by_sys_id(caller_sys_id)
-                    if caller_lookup.get("found"):
-                        caller_email = caller_lookup.get("email", "")
-                        logger.info(f"Found caller email: {caller_email}")
+            # --- Send email notification to ticket recipients (only if status changed) ---
+            if state_actually_changed:
+                try:
+                    # Get ticket details for email notification
+                    ticket_details = result_list[0]
+                    logger.info(f"ServiceNow ticket details: {ticket_details}")
+                    caller_sys_id = ticket_details.get("caller_id", "")
+                    logger.info(f"DEBUG: caller_id type: {type(caller_sys_id)}, value: {caller_sys_id}")
+                    
+                    # Handle case where caller_id is a dict (link/value)
+                    if isinstance(caller_sys_id, dict):
+                        caller_sys_id = caller_sys_id.get("value", "")
+                    elif isinstance(caller_sys_id, str) and caller_sys_id.strip().startswith('{'):
+                        try:
+                            import ast
+                            caller_dict = ast.literal_eval(caller_sys_id)
+                            if isinstance(caller_dict, dict):
+                                caller_sys_id = caller_dict.get("value", "")
+                                logger.info(f"DEBUG: Extracted sys_id from string dict: {caller_sys_id}")
+                        except Exception as e:
+                            logger.warning(f"Failed to parse caller_id string: {e}")
+                    short_description = ticket_details.get("short_description", "Support Request")
+                    
+                    # Lookup caller email using caller sys_id
+                    caller_email = ""
+                    if caller_sys_id:
+                        logger.info(f"Looking up caller email for sys_id: {caller_sys_id}")
+                        caller_lookup = servicenow_api.lookup_user_by_sys_id(caller_sys_id)
+                        if caller_lookup.get("found"):
+                            caller_email = caller_lookup.get("email", "")
+                            logger.info(f"Found caller email: {caller_email}")
+                        else:
+                            logger.warning(f"Caller lookup failed: {caller_lookup.get('error', 'Unknown error')}")
                     else:
-                        logger.warning(f"Caller lookup failed: {caller_lookup.get('error', 'Unknown error')}")
-                else:
-                    logger.warning(f"No caller sys_id found for ticket {servicenow_ticket_id}")
-                
-                if caller_email:
-                    # Initialize notification agent
-                    from agents.notification import NotificationAgent
-                    notification_agent = NotificationAgent(config)
+                        logger.warning(f"No caller sys_id found for ticket {servicenow_ticket_id}")
                     
-                    # Map ServiceNow state to status name for email
-                    status_names = {
-                        "1": "New",
-                        "2": "In Progress", 
-                        "3": "On Hold",
-                        "6": "Resolved",
-                        "7": "Closed"
-                    }
-                    status_name = status_names.get(servicenow_state, "Updated")
-                    
-                    # Prepare update notes
-                    update_notes = f"Ticket status changed to {status_name} via Jira update"
-                    if servicenow_state in ["6", "7"]:
-                        update_notes += "\n\nResolution: Automatically resolved via Jira webhook"
-                    
-                    # Send update email
-                    email_result = notification_agent.send_update_email(
-                        recipient_email=caller_email,
-                        ticket_number=servicenow_ticket_id,
-                        short_description=short_description,
-                        update_notes=update_notes,
-                        status=status_name
-                    )
-                    
-                    if email_result.get("success"):
-                        logger.info(f"✅ Email notification sent to {caller_email} for ticket {servicenow_ticket_id}")
+                    if caller_email:
+                        # Initialize notification agent
+                        from agents.notification import NotificationAgent
+                        notification_agent = NotificationAgent(config)
+                        
+                        # Map ServiceNow state to status name for email
+                        status_names = {
+                            "1": "New",
+                            "2": "In Progress", 
+                            "3": "On Hold",
+                            "6": "Resolved",
+                            "7": "Closed"
+                        }
+                        status_name = status_names.get(servicenow_state, "Updated")
+                        
+                        # Prepare update notes
+                        update_notes = f"Ticket status changed to {status_name} via Jira update"
+                        if servicenow_state in ["6", "7"]:
+                            update_notes += "\n\nResolution: Automatically resolved via Jira webhook"
+                        
+                        # Send update email
+                        email_result = notification_agent.send_update_email(
+                            recipient_email=caller_email,
+                            ticket_number=servicenow_ticket_id,
+                            short_description=short_description,
+                            update_notes=update_notes,
+                            status=status_name
+                        )
+                        
+                        if email_result.get("success"):
+                            logger.info(f"✅ Email notification sent to {caller_email} for ticket {servicenow_ticket_id}")
+                        else:
+                            logger.warning(f"⚠️ Failed to send email notification: {email_result.get('error')}")
                     else:
-                        logger.warning(f"⚠️ Failed to send email notification: {email_result.get('error')}")
-                else:
-                    logger.warning(f"No caller email found for ticket {servicenow_ticket_id}, skipping email notification")
-                    
-            except Exception as email_error:
-                logger.error(f"Error sending email notification: {email_error}")
-                # Don't fail the webhook if email fails
+                        logger.warning(f"No caller email found for ticket {servicenow_ticket_id}, skipping email notification")
+                except Exception as email_error:
+                    logger.error(f"Error sending email notification: {email_error}")
+            else:
+                logger.info(f"ServiceNow state unchanged ({current_sn_state}), skipping duplicate email")
             
             return {
                 "message": "ServiceNow ticket updated successfully",

@@ -144,5 +144,21 @@ def get_ticket_history(sys_id: str) -> List[Dict[str, Any]]:
     conn.close()
     return [dict(h) for h in history]
 
+
+def already_notified_for_status(ticket_sys_id: str, new_status: str) -> bool:
+    """Return True if we already sent a notification (closure or status update) for this ticket with this status.
+    Prevents duplicate emails when status is the same."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    row = c.execute(
+        """SELECT 1 FROM ticket_history
+           WHERE ticket_sys_id = ? AND action = 'NOTIFICATION_SENT' AND new_status = ?
+           ORDER BY timestamp DESC LIMIT 1""",
+        (ticket_sys_id, new_status),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
 # Initialize DB on import
 init_db()

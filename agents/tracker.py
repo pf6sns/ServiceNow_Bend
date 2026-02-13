@@ -11,7 +11,7 @@ import json
 from agents.servicenow import ServiceNowAgent
 from agents.notification import NotificationAgent
 from utils.logger import setup_logger
-from utils.db import save_ticket, get_ticket, get_all_tickets, add_history, get_ticket_history
+from utils.db import save_ticket, get_ticket, get_all_tickets, add_history, get_ticket_history, already_notified_for_status
 
 logger = setup_logger(__name__)
 
@@ -168,19 +168,22 @@ class TrackerAgent:
                 ticket_data['status'] = current_status
                 has_changes = True
 
-                # Send notifications
+                # Send notifications only when status actually changed and we have not already sent for this status
                 if current_status in self.closed_states:
-                     # Check if previous was not closed to avoid duplicate notifications
-                     if previous_status not in self.closed_states:
-                        await self._send_closure_notification(sys_id, ticket_data, status_result)
-                
+                    if previous_status not in self.closed_states:
+                        if not already_notified_for_status(sys_id, current_status):
+                            await self._send_closure_notification(sys_id, ticket_data, status_result)
+                        else:
+                            logger.debug(f"Already sent closure notification for {ticket_number} (status {current_status}), skipping")
                 elif self.config.get_setting("send_status_updates", False):
-                     # Send update notification
-                     previous_status_name = self.status_mappings.get(previous_status, "Unknown")
-                     await self._send_status_update_notification(
-                         sys_id, ticket_data, status_result,
-                         previous_status, previous_status_name
-                     )
+                    if not already_notified_for_status(sys_id, current_status):
+                        previous_status_name = self.status_mappings.get(previous_status, "Unknown")
+                        await self._send_status_update_notification(
+                            sys_id, ticket_data, status_result,
+                            previous_status, previous_status_name
+                        )
+                    else:
+                        logger.debug(f"Already sent status-update for {ticket_number} (status {current_status}), skipping")
 
             # Handle possible None/Empty values for comparison
             # In DB they might be None, so we treat None as ""

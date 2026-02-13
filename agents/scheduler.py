@@ -108,8 +108,22 @@ class SchedulerAgent:
                     logger.error(f"Error classifying email: {e}")
                     continue
             
-            state["support_emails"] = support_emails
-            logger.info(f"Classified {len(support_emails)} emails as support-related")
+            # Deduplicate by message_id (and by subject+from+date when no message_id) to avoid creating duplicate tickets in one run
+            seen_keys = set()
+            deduped = []
+            for email in support_emails:
+                mid = (email.get("message_id") or "").strip()
+                if mid:
+                    key = mid
+                else:
+                    key = f"{email.get('subject', '')}|{email.get('from', '')}|{email.get('date', '')}"
+                if key in seen_keys:
+                    logger.info(f"Skipping duplicate email in same batch: '{email.get('subject', 'No subject')[:50]}'")
+                    continue
+                seen_keys.add(key)
+                deduped.append(email)
+            state["support_emails"] = deduped
+            logger.info(f"Classified {len(deduped)} emails as support-related (after dedup)")
             return state
         
         def process_support_emails(state: WorkflowState) -> WorkflowState:
