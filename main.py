@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
         # Create and start the background scheduler
         scheduler = AsyncIOScheduler()
         
-        # Add job to check emails every 10 minutes
+        # Add job to check emails every 1 minute
         scheduler.add_job(
             func=scheduler_agent.trigger_workflow,
             trigger=IntervalTrigger(minutes=1),
@@ -46,8 +46,18 @@ async def lifespan(app: FastAPI):
             replace_existing=True
         )
         
+        # Add job to check ticket status every 10 seconds
+        scheduler.add_job(
+            func=scheduler_agent.trigger_tracker_check,
+            trigger=IntervalTrigger(seconds=10),
+            id='ticket_status_job',
+            name='Check ticket status updates',
+            replace_existing=True
+        )
+        
         scheduler.start()
-        logger.info("Background scheduler started - checking emails every 10 minutes")
+        logger.info("Background scheduler started - checking emails every 1 minute")
+        logger.info("Background scheduler started - checking ticket status every 10 seconds")
         
         # Initial run
         asyncio.create_task(scheduler_agent.trigger_workflow())
@@ -323,6 +333,13 @@ async def trigger_manual():
         raise HTTPException(status_code=500, detail=f"Manual trigger failed: {str(e)}")
 
 
+
+
+# Import routes
+from routes import ticket_routes
+
+# Include routers
+app.include_router(ticket_routes.router)
 
 if __name__ == "__main__":
     import uvicorn

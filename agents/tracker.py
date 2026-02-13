@@ -4,13 +4,14 @@ Tracker Agent - Periodically checks ServiceNow ticket status and sends closure n
 
 import logging
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 import json
 
 from agents.servicenow import ServiceNowAgent
 from agents.notification import NotificationAgent
 from utils.logger import setup_logger
+from utils.db import save_ticket, get_ticket, get_all_tickets, add_history, get_ticket_history
 
 logger = setup_logger(__name__)
 
@@ -21,9 +22,6 @@ class TrackerAgent:
         self.config = config
         self.servicenow_agent = ServiceNowAgent(config)
         self.notification_agent = NotificationAgent(config)
-        
-        # In-memory storage for tracked tickets (in production, use database)
-        self.tracked_tickets = {}
         
         # Status mappings (ServiceNow state values)
         self.status_mappings = {
@@ -49,19 +47,56 @@ class TrackerAgent:
             additional_data: Additional ticket data for notifications
         """
         try:
-            tracking_data = {
+            additional_data = additional_data or {}
+
+            # Normalize Jira ticket reference (can be a key string or a nested dict from the Jira backend)
+            jira_ticket_raw = additional_data.get("jira_ticket")
+            jira_ticket_id = None
+
+            if isinstance(jira_ticket_raw, dict):
+                # Common shape from Jira-Backend /jira/auto-assign:
+                # { "message": "...", "data": { "issue": "KEY-123", "assigned_to": "..." } }
+                data_part = jira_ticket_raw.get("data")
+                if isinstance(data_part, dict):
+                    jira_ticket_id = data_part.get("issue") or data_part.get("key")
+                else:
+                    # Sometimes we might already have {"issue": "..."} or {"key": "..."}
+                    jira_ticket_id = jira_ticket_raw.get("issue") or jira_ticket_raw.get("key")
+
+                if jira_ticket_id is not None:
+                    jira_ticket_id = str(jira_ticket_id)
+            elif jira_ticket_raw is not None:
+                # Plain string or other primitive
+                jira_ticket_id = str(jira_ticket_raw)
+            
+            # Prepare ticket data for DB
+            ticket_data = {
                 "sys_id": sys_id,
                 "ticket_number": ticket_number,
                 "caller_email": caller_email,
-                "created_time": datetime.now(),
-                "last_checked": None,
-                "last_status": None,
-                "status_history": [],
-                "notification_sent": False,
-                "additional_data": additional_data or {}
+                "status": "1", # Default to New
+                "short_description": additional_data.get("short_description", ""),
+                "description": additional_data.get("description", ""),
+                "created_at": datetime.now(),
+                "jira_ticket_id": jira_ticket_id,
+                "priority": additional_data.get("priority"),
+                "urgency": additional_data.get("urgency"),
+                "category": additional_data.get("category_name"),
             }
             
-            self.tracked_tickets[sys_id] = tracking_data
+            save_ticket(ticket_data)
+            
+            # Add initial history
+            add_history({
+                "ticket_sys_id": sys_id,
+                "ticket_number": ticket_number,
+                "action": "TRACKING_STARTED",
+                "previous_status": None,
+                "new_status": "1",
+                "changed_by": "System",
+                "details": {"message": f"Started tracking ticket {ticket_number}"}
+            })
+            
             logger.info(f"Started tracking ticket {ticket_number} ({sys_id}) for {caller_email}")
             
         except Exception as e:
@@ -69,39 +104,33 @@ class TrackerAgent:
     
     async def check_all_tracked_tickets(self):
         """Check status of all tracked tickets"""
-        if not self.tracked_tickets:
+        tickets = get_all_tickets()
+        
+        if not tickets:
             logger.debug("No tickets to track")
             return
         
-        logger.info(f"Checking status of {len(self.tracked_tickets)} tracked tickets")
+        # Filter for active tickets only (not closed/resolved, or recently closed)
+        active_tickets = [t for t in tickets if t['status'] not in self.closed_states]
         
-        tickets_to_remove = []
+        logger.info(f"Checking status of {len(active_tickets)} active tickets")
         
-        for sys_id, ticket_data in self.tracked_tickets.items():
+        for ticket in active_tickets:
             try:
-                await self._check_single_ticket(sys_id, ticket_data)
+                # Convert active DB row to dict for processing
+                ticket_data = dict(ticket)
+                sys_id = ticket_data.get('sys_id')
                 
-                # Remove from tracking if closed and notification sent
-                if (ticket_data.get("notification_sent") and 
-                    ticket_data.get("last_status") in self.closed_states):
-                    tickets_to_remove.append(sys_id)
+                await self._check_single_ticket(sys_id, ticket_data)
                     
             except Exception as e:
-                logger.error(f"Error checking ticket {ticket_data.get('ticket_number', sys_id)}: {e}")
+                logger.error(f"Error checking ticket {ticket.get('ticket_number')}: {e}")
         
-        # Clean up completed tickets
-        for sys_id in tickets_to_remove:
-            ticket_number = self.tracked_tickets[sys_id].get("ticket_number", sys_id)
-            del self.tracked_tickets[sys_id]
-            logger.info(f"Removed completed ticket {ticket_number} from tracking")
-        
-        logger.info(f"Ticket status check complete. {len(tickets_to_remove)} tickets removed from tracking")
     
     async def _check_single_ticket(self, sys_id: str, ticket_data: Dict[str, Any]):
         """Check status of a single ticket"""
         try:
             ticket_number = ticket_data.get("ticket_number", sys_id)
-            caller_email = ticket_data.get("caller_email", "")
             
             # Get current status from ServiceNow
             status_result = self.servicenow_agent.get_incident_status(sys_id)
@@ -111,42 +140,74 @@ class TrackerAgent:
                 return
             
             current_status = status_result.get("state", "")
-            current_status_name = self.status_mappings.get(current_status, "Unknown")
+            current_assigned_to = status_result.get("assigned_to", "") or ""
+            current_assignment_group = status_result.get("assignment_group", "") or ""
             
-            # Update tracking data
-            ticket_data["last_checked"] = datetime.now()
-            previous_status = ticket_data.get("last_status")
+            previous_status = ticket_data.get("status")
+            previous_assigned_to = ticket_data.get("assigned_to") or ""
             
-            # Check if status changed
+            # Update tracking data in DB if changed
+            has_changes = False
+            
             if current_status != previous_status:
                 logger.info(f"Status change for {ticket_number}: {previous_status} -> {current_status}")
                 
-                # Store the actual previous status for notifications BEFORE updating
-                actual_previous_status = previous_status
-                actual_previous_status_name = self.status_mappings.get(actual_previous_status, "Unknown") if actual_previous_status else "Unknown"
-                
-                # Add to status history (with correct previous status)
-                ticket_data["status_history"].append({
-                    "status": current_status,
-                    "status_name": current_status_name,
-                    "timestamp": datetime.now(),
-                    "previous_status": actual_previous_status
+                add_history({
+                    "ticket_sys_id": sys_id,
+                    "ticket_number": ticket_number,
+                    "action": "STATUS_CHANGE",
+                    "previous_status": previous_status,
+                    "new_status": current_status,
+                    "changed_by": "ServiceNow Sync",
+                    "details": {
+                        "old_status_name": self.status_mappings.get(previous_status),
+                        "new_status_name": self.status_mappings.get(current_status)
+                    }
                 })
                 
-                # Send notification if ticket is closed
-                if current_status in self.closed_states and not ticket_data.get("notification_sent"):
-                    await self._send_closure_notification(sys_id, ticket_data, status_result)
-                    ticket_data["notification_sent"] = True
+                ticket_data['status'] = current_status
+                has_changes = True
+
+                # Send notifications
+                if current_status in self.closed_states:
+                     # Check if previous was not closed to avoid duplicate notifications
+                     if previous_status not in self.closed_states:
+                        await self._send_closure_notification(sys_id, ticket_data, status_result)
                 
-                # Send update notification for ANY status change if configured
                 elif self.config.get_setting("send_status_updates", False):
-                    await self._send_status_update_notification(
-                        sys_id, ticket_data, status_result, 
-                        actual_previous_status, actual_previous_status_name
-                    )
-                
-                # FINALLY update the stored status AFTER all notifications are sent
-                ticket_data["last_status"] = current_status
+                     # Send update notification
+                     previous_status_name = self.status_mappings.get(previous_status, "Unknown")
+                     await self._send_status_update_notification(
+                         sys_id, ticket_data, status_result,
+                         previous_status, previous_status_name
+                     )
+
+            # Handle possible None/Empty values for comparison
+            # In DB they might be None, so we treat None as ""
+            curr_assign = str(current_assigned_to) if current_assigned_to else ""
+            prev_assign = str(previous_assigned_to) if previous_assigned_to else ""
+
+            if curr_assign != prev_assign:
+                 logger.info(f"Assignment change for {ticket_number}: {prev_assign} -> {curr_assign}")
+                 add_history({
+                    "ticket_sys_id": sys_id,
+                    "ticket_number": ticket_number,
+                    "action": "ASSIGNMENT_CHANGE",
+                    "previous_status": previous_status,
+                    "new_status": current_status,
+                    "changed_by": "ServiceNow Sync",
+                    "details": {
+                        "old_assigned_to": prev_assign,
+                        "new_assigned_to": curr_assign,
+                        "assignment_group": current_assignment_group
+                    }
+                })
+                 ticket_data['assigned_to'] = current_assigned_to
+                 ticket_data['assignment_group'] = current_assignment_group
+                 has_changes = True
+
+            if has_changes:
+                save_ticket(ticket_data)
                 
         except Exception as e:
             logger.error(f"Error checking single ticket {sys_id}: {e}")
@@ -157,14 +218,13 @@ class TrackerAgent:
         try:
             ticket_number = ticket_data.get("ticket_number", "")
             caller_email = ticket_data.get("caller_email", "")
-            additional_data = ticket_data.get("additional_data", {})
+            # Reuse DB data
+            short_description = ticket_data.get("short_description", "Support Request")
             
             if not caller_email:
                 logger.warning(f"No caller email for ticket {ticket_number}, skipping closure notification")
                 return
             
-            # Prepare notification data
-            short_description = additional_data.get("short_description", "Support Request")
             resolution_notes = status_result.get("resolution_notes", "Issue has been resolved.")
             
             # Send closure email
@@ -179,6 +239,18 @@ class TrackerAgent:
             
             if result.get("success"):
                 logger.info(f"Closure notification sent for ticket {ticket_number}")
+                
+                 # Log notification in history
+                add_history({
+                    "ticket_sys_id": sys_id,
+                    "ticket_number": ticket_number,
+                    "action": "NOTIFICATION_SENT",
+                    "previous_status": ticket_data.get("status"),
+                    "new_status": ticket_data.get("status"),
+                    "changed_by": "System",
+                    "details": {"type": "CLOSURE_EMAIL", "recipient": caller_email}
+                })
+
             else:
                 logger.error(f"Failed to send closure notification for {ticket_number}: {result.get('error')}")
                 
@@ -192,21 +264,19 @@ class TrackerAgent:
         try:
             ticket_number = ticket_data.get("ticket_number", "")
             caller_email = ticket_data.get("caller_email", "")
-            additional_data = ticket_data.get("additional_data", {})
+            short_description = ticket_data.get("short_description", "Support Request")
             
             if not caller_email:
                 logger.warning(f"No caller email for ticket {ticket_number}, skipping update notification")
                 return
             
-            # Prepare notification data - now using the passed previous status values
-            short_description = additional_data.get("short_description", "Support Request")
             current_status = status_result.get("state", "")
             status_name = self.status_mappings.get(current_status, "Unknown")
             
-            # Create update notes using the correct previous status
+            # Create update notes
             update_notes = f"Ticket status changed to {status_name}"
             
-            # Add resolution notes if available (for resolved/closed states)
+            # Add resolution notes if available
             if current_status in ["6", "7"] and status_result.get("resolution_notes"):
                 update_notes += f"\n\nResolution: {status_result.get('resolution_notes')}"
             
@@ -227,6 +297,17 @@ class TrackerAgent:
             
             if result.get("success"):
                 logger.info(f"Status update notification sent for ticket {ticket_number}")
+                
+                # Log notification in history
+                add_history({
+                    "ticket_sys_id": sys_id,
+                    "ticket_number": ticket_number,
+                    "action": "NOTIFICATION_SENT",
+                    "previous_status": ticket_data.get("status"),
+                    "new_status": ticket_data.get("status"),
+                    "changed_by": "System",
+                    "details": {"type": "STATUS_UPDATE_EMAIL", "recipient": caller_email}
+                })
             else:
                 logger.error(f"Failed to send status update for {ticket_number}: {result.get('error')}")
                 
@@ -234,51 +315,56 @@ class TrackerAgent:
             logger.error(f"Error sending status update notification for {sys_id}: {e}")
   
     def get_tracked_tickets_summary(self) -> Dict[str, Any]:
-        """Get summary of currently tracked tickets"""
+        """Get summary of currently tracked tickets from DB"""
         try:
+            tickets = get_all_tickets()
             summary = {
-                "total_tracked": len(self.tracked_tickets),
+                "total_tracked": len(tickets),
                 "by_status": {},
                 "pending_notifications": 0,
                 "oldest_ticket": None,
                 "newest_ticket": None
             }
             
-            if not self.tracked_tickets:
+            if not tickets:
                 return summary
             
             oldest_time = None
             newest_time = None
             
-            for sys_id, ticket_data in self.tracked_tickets.items():
+            for ticket in tickets:
+                ticket_dict = dict(ticket)
                 # Count by status
-                status = ticket_data.get("last_status", "Unknown")
+                status = ticket_dict.get("status", "Unknown")
                 status_name = self.status_mappings.get(status, "Unknown")
                 summary["by_status"][status_name] = summary["by_status"].get(status_name, 0) + 1
                 
-                # Count pending notifications
-                if (ticket_data.get("last_status") in self.closed_states and 
-                    not ticket_data.get("notification_sent")):
-                    summary["pending_notifications"] += 1
+                # timestamps
+                created_str = ticket_dict.get("created_at")
+                created_time = datetime.now()
+                if isinstance(created_str, str):
+                    try:
+                        created_time = datetime.fromisoformat(created_str)
+                    except ValueError:
+                         pass
+                elif isinstance(created_str, datetime):
+                    created_time = created_str
+
+                if oldest_time is None or created_time < oldest_time:
+                    oldest_time = created_time
+                    summary["oldest_ticket"] = {
+                        "ticket_number": ticket_dict.get("ticket_number"),
+                        "created": created_time.isoformat(),
+                        "caller": ticket_dict.get("caller_email")
+                    }
                 
-                # Track oldest and newest
-                created_time = ticket_data.get("created_time")
-                if created_time:
-                    if oldest_time is None or created_time < oldest_time:
-                        oldest_time = created_time
-                        summary["oldest_ticket"] = {
-                            "ticket_number": ticket_data.get("ticket_number"),
-                            "created": created_time.isoformat(),
-                            "caller": ticket_data.get("caller_email")
-                        }
-                    
-                    if newest_time is None or created_time > newest_time:
-                        newest_time = created_time
-                        summary["newest_ticket"] = {
-                            "ticket_number": ticket_data.get("ticket_number"),
-                            "created": created_time.isoformat(),
-                            "caller": ticket_data.get("caller_email")
-                        }
+                if newest_time is None or created_time > newest_time:
+                    newest_time = created_time
+                    summary["newest_ticket"] = {
+                        "ticket_number": ticket_dict.get("ticket_number"),
+                        "created": created_time.isoformat(),
+                        "caller": ticket_dict.get("caller_email")
+                    }
             
             return summary
             
@@ -289,46 +375,16 @@ class TrackerAgent:
     def stop_tracking_ticket(self, sys_id: str) -> bool:
         """
         Stop tracking a specific ticket
-        
-        Args:
-            sys_id: ServiceNow sys_id of the ticket
-            
-        Returns:
-            bool: True if ticket was being tracked and removed
         """
-        try:
-            if sys_id in self.tracked_tickets:
-                ticket_number = self.tracked_tickets[sys_id].get("ticket_number", sys_id)
-                del self.tracked_tickets[sys_id]
-                logger.info(f"Stopped tracking ticket {ticket_number}")
-                return True
-            else:
-                logger.warning(f"Ticket {sys_id} was not being tracked")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error stopping ticket tracking for {sys_id}: {e}")
-            return False
-    
+        # For compatibility with workflow, we just return true.
+        # DB keeps the record.
+        return True
+
     def get_ticket_status_history(self, sys_id: str) -> List[Dict[str, Any]]:
-        """Get status history for a tracked ticket"""
+        """Get status history for a tracked ticket from DB"""
         try:
-            if sys_id not in self.tracked_tickets:
-                return []
-            
-            ticket_data = self.tracked_tickets[sys_id]
-            history = ticket_data.get("status_history", [])
-            
-            # Convert datetime objects to ISO strings for serialization
-            formatted_history = []
-            for entry in history:
-                formatted_entry = entry.copy()
-                if isinstance(formatted_entry.get("timestamp"), datetime):
-                    formatted_entry["timestamp"] = formatted_entry["timestamp"].isoformat()
-                formatted_history.append(formatted_entry)
-            
-            return formatted_history
-            
+            history = get_ticket_history(sys_id)
+            return history
         except Exception as e:
             logger.error(f"Error getting status history for {sys_id}: {e}")
             return []
@@ -336,47 +392,20 @@ class TrackerAgent:
     def cleanup_old_tickets(self, days_old: int = 30):
         """
         Clean up tracking data for very old tickets
-        
-        Args:
-            days_old: Remove tickets older than this many days
         """
-        try:
-            cutoff_date = datetime.now() - timedelta(days=days_old)
-            tickets_to_remove = []
-            
-            for sys_id, ticket_data in self.tracked_tickets.items():
-                created_time = ticket_data.get("created_time")
-                if created_time and created_time < cutoff_date:
-                    tickets_to_remove.append(sys_id)
-            
-            for sys_id in tickets_to_remove:
-                ticket_number = self.tracked_tickets[sys_id].get("ticket_number", sys_id)
-                del self.tracked_tickets[sys_id]
-                logger.info(f"Cleaned up old ticket {ticket_number} from tracking")
-            
-            if tickets_to_remove:
-                logger.info(f"Cleaned up {len(tickets_to_remove)} old tickets from tracking")
-            else:
-                logger.debug("No old tickets to clean up")
-                
-        except Exception as e:
-            logger.error(f"Error during ticket cleanup: {e}")
-    
+        # Implement DB cleanup if needed, for now skip to avoid data loss
+        pass
+
     def force_check_ticket(self, sys_id: str) -> Dict[str, Any]:
         """
         Force an immediate status check for a specific ticket
-        
-        Args:
-            sys_id: ServiceNow sys_id of the ticket
-            
-        Returns:
-            Dict with check result
         """
         try:
-            if sys_id not in self.tracked_tickets:
-                return {"success": False, "error": "Ticket not being tracked"}
+            ticket = get_ticket(sys_id)
+            if not ticket:
+                return {"success": False, "error": "Ticket not found in DB"}
             
-            ticket_data = self.tracked_tickets[sys_id]
+            ticket_data = dict(ticket)
             
             # Run the check
             asyncio.create_task(self._check_single_ticket(sys_id, ticket_data))
@@ -389,86 +418,11 @@ class TrackerAgent:
         except Exception as e:
             logger.error(f"Error force checking ticket {sys_id}: {e}")
             return {"success": False, "error": str(e)}
-    
+
     def export_tracking_data(self) -> Dict[str, Any]:
-        """Export current tracking data (for backup/analysis)"""
-        try:
-            export_data = {
-                "export_time": datetime.now().isoformat(),
-                "total_tickets": len(self.tracked_tickets),
-                "tickets": {}
-            }
-            
-            for sys_id, ticket_data in self.tracked_tickets.items():
-                # Convert datetime objects to ISO strings
-                export_ticket = {}
-                for key, value in ticket_data.items():
-                    if isinstance(value, datetime):
-                        export_ticket[key] = value.isoformat()
-                    elif key == "status_history":
-                        # Convert datetime in history entries
-                        export_history = []
-                        for entry in value:
-                            export_entry = entry.copy()
-                            if isinstance(export_entry.get("timestamp"), datetime):
-                                export_entry["timestamp"] = export_entry["timestamp"].isoformat()
-                            export_history.append(export_entry)
-                        export_ticket[key] = export_history
-                    else:
-                        export_ticket[key] = value
-                
-                export_data["tickets"][sys_id] = export_ticket
-            
-            logger.info(f"Exported tracking data for {len(self.tracked_tickets)} tickets")
-            return export_data
-            
-        except Exception as e:
-            logger.error(f"Error exporting tracking data: {e}")
-            return {"error": str(e)}
-    
+        """Export current tracking data"""
+        return {"message": "Use DB backup instead"}
+
     def import_tracking_data(self, import_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Import tracking data (for restore/migration)"""
-        try:
-            imported_count = 0
-            errors = []
-            
-            tickets_data = import_data.get("tickets", {})
-            
-            for sys_id, ticket_data in tickets_data.items():
-                try:
-                    # Convert ISO strings back to datetime objects
-                    restored_ticket = {}
-                    for key, value in ticket_data.items():
-                        if key in ["created_time", "last_checked"] and isinstance(value, str):
-                            restored_ticket[key] = datetime.fromisoformat(value)
-                        elif key == "status_history" and isinstance(value, list):
-                            # Convert datetime in history entries
-                            restored_history = []
-                            for entry in value:
-                                restored_entry = entry.copy()
-                                if isinstance(entry.get("timestamp"), str):
-                                    restored_entry["timestamp"] = datetime.fromisoformat(entry["timestamp"])
-                                restored_history.append(restored_entry)
-                            restored_ticket[key] = restored_history
-                        else:
-                            restored_ticket[key] = value
-                    
-                    self.tracked_tickets[sys_id] = restored_ticket
-                    imported_count += 1
-                    
-                except Exception as e:
-                    errors.append(f"Error importing ticket {sys_id}: {str(e)}")
-            
-            logger.info(f"Imported tracking data for {imported_count} tickets")
-            if errors:
-                logger.warning(f"Import errors: {errors}")
-            
-            return {
-                "success": True,
-                "imported_count": imported_count,
-                "errors": errors
-            }
-            
-        except Exception as e:
-            logger.error(f"Error importing tracking data: {e}")
-            return {"success": False, "error": str(e)}
+        """Import tracking data"""
+        return {"message": "Not supported with DB backend yet"}

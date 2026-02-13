@@ -166,13 +166,23 @@ class SchedulerAgent:
             """Node: Start tracking created tickets"""
             if state.get("error") or not state.get("processed_tickets"):
                 return state
-            
+
             for ticket in state["processed_tickets"]:
                 try:
+                    # Pass through important metadata, including any Jira ticket reference,
+                    # so it can be persisted in the tracking database.
                     self.tracker.start_tracking_ticket(
                         ticket["sys_id"],
                         ticket["ticket_number"],
-                        ticket["email"].get("from", "")
+                        ticket["email"].get("from", ""),
+                        additional_data={
+                            "short_description": ticket.get("short_description", ""),
+                            "description": ticket.get("description", ""),
+                            "priority": ticket.get("priority"),
+                            "urgency": ticket.get("urgency"),
+                            "category_name": ticket.get("category_name"),
+                            "jira_ticket": ticket.get("jira_ticket"),
+                        },
                     )
                 except Exception as e:
                     logger.error(f"Error starting ticket tracking: {e}")
